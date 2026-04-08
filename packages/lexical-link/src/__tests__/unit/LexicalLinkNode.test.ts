@@ -39,6 +39,7 @@ import {
   ParagraphNode,
   RangeSelection,
   SerializedParagraphNode,
+  TextNode,
 } from 'lexical';
 import {initializeUnitTest} from 'lexical/src/__tests__/utils';
 import {assert, describe, expect, it, test} from 'vitest';
@@ -265,7 +266,6 @@ describe('LexicalLinkNode tests', () => {
           const {editor} = testEnv;
 
           await editor.update(() => {
-            // eslint-disable-next-line no-script-url
             const linkNode = $createLinkNode(input);
             expect(linkNode.createDOM(editorConfig).outerHTML).toBe(
               `<a href="${output}" class="my-link-class"></a>`,
@@ -899,7 +899,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('extracts block child (HeadingNode) from link', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let textKey: string;
     editor.update(
       () => {
@@ -939,7 +939,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('extracts block child (ParagraphNode) from link', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let textKey: string;
     editor.update(
       () => {
@@ -982,7 +982,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('handles siblings after block child', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let afterTextKey: string;
     editor.update(
       () => {
@@ -1036,7 +1036,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('fixes element selection in paragraph split to the right of LinkNode', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let afterTextKey: string;
     editor.update(
       () => {
@@ -1073,7 +1073,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('fixes element selection in LinkNode to the right of non-inline node', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let afterTextKey: string;
     editor.update(
       () => {
@@ -1118,7 +1118,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('fixes element selection with multiple non-inline siblings', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let heading2TextKey: string;
     editor.update(
       () => {
@@ -1161,7 +1161,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('fixes element selection when no siblings to the right of LinkNode', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     editor.update(
       () => {
         const root = $getRoot();
@@ -1195,7 +1195,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('selection in paragraph right of link with trailing text in link', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let afterTextKey: string;
     editor.update(
       () => {
@@ -1232,7 +1232,7 @@ describe('LinkNode transform (Regression #8083)', () => {
   });
 
   test('selection at end of link with heading only child', () => {
-    const editor = buildEditorFromExtensions(transformExtension);
+    using editor = buildEditorFromExtensions(transformExtension);
     let headingTextKey: string;
     editor.update(
       () => {
@@ -1264,6 +1264,161 @@ describe('LinkNode transform (Regression #8083)', () => {
       expect(selection.anchor.type).toBe('text');
       expect(selection.anchor.key).toBe(headingTextKey);
       expect(selection.anchor.offset).toBe(7);
+    });
+  });
+
+  test('an empty link is not deleted if the transformation did not occur', () => {
+    using editor = buildEditorFromExtensions(transformExtension);
+    let linkKey: string;
+    editor.update(
+      () => {
+        const root = $getRoot();
+        const link = $createLinkNode('https://lexical.dev');
+        linkKey = link.getKey();
+        const paragraph = $createParagraphNode();
+        paragraph.append(link);
+        root.clear().append(paragraph);
+        link.select();
+      },
+      {discrete: true},
+    );
+    editor.read(() => {
+      const linkNode = $getNodeByKey(linkKey);
+      expect(linkNode).not.toBe(null);
+    });
+  });
+
+  // Regression #8305: All five visually-equivalent cursor positions at the
+  // boundary between two adjacent identical links must resolve to the merge
+  // boundary (textA at offset 5) after the links merge.
+  type MergeScenarioNodes = {
+    linkA: LinkNode;
+    linkB: LinkNode;
+    paragraph: ParagraphNode;
+    textA: TextNode;
+    textB: TextNode;
+  };
+  const mergeBoundaryScenarios: [
+    string,
+    ($nodes: MergeScenarioNodes) => void,
+  ][] = [
+    ['text point at end of first link text', ({textA}) => textA.select(5, 5)],
+    [
+      'text point at start of second link text',
+      ({textB}) => textB.select(0, 0),
+    ],
+    [
+      'element point at last child of first link',
+      ({linkA}) => linkA.select(1, 1),
+    ],
+    [
+      'element point between the two links',
+      ({paragraph}) => paragraph.select(1, 1),
+    ],
+    [
+      'element point at first child of second link',
+      ({linkB}) => linkB.select(0, 0),
+    ],
+  ];
+
+  test.each(mergeBoundaryScenarios)(
+    '#8305 cursor at merge boundary: %s',
+    (_desc, $setSelectionAtBoundary) => {
+      using editor = buildEditorFromExtensions(transformExtension);
+      let textAKey: string;
+      editor.update(
+        () => {
+          const textA = $createTextNode('link1');
+          textAKey = textA.getKey();
+          const textB = $createTextNode('link2');
+          const linkA = $createLinkNode('https://lexical.dev').append(textA);
+          const linkB = $createLinkNode('https://lexical.dev').append(textB);
+          const paragraph = $createParagraphNode().append(linkA, linkB);
+          $getRoot().clear().append(paragraph);
+          $setSelectionAtBoundary({linkA, linkB, paragraph, textA, textB});
+        },
+        {discrete: true},
+      );
+      editor.read(() => {
+        const paragraph = $getRoot().getFirstChild();
+        assert($isParagraphNode(paragraph), 'Expected ParagraphNode');
+        expect(paragraph.getChildrenSize()).toBe(1);
+        const mergedLink = paragraph.getFirstChild();
+        assert($isLinkNode(mergedLink), 'Expected LinkNode');
+        expect(mergedLink.getTextContent()).toBe('link1link2');
+        const selection = $getSelection();
+        assert($isRangeSelection(selection), 'Expected RangeSelection');
+        expect(selection.isCollapsed()).toBe(true);
+        expect(selection.anchor.type).toBe('text');
+        expect(selection.anchor.key).toBe(textAKey);
+        expect(selection.anchor.offset).toBe(5);
+      });
+    },
+  );
+
+  test('#8305 edge case: second link starts with LineBreakNode', () => {
+    using editor = buildEditorFromExtensions(transformExtension);
+    let textAKey: string;
+    editor.update(
+      () => {
+        const textA = $createTextNode('link1');
+        textAKey = textA.getKey();
+        const paragraph = $createParagraphNode().append(
+          $createLinkNode('https://lexical.dev').append(textA),
+          $createLinkNode('https://lexical.dev').append(
+            $createLineBreakNode(),
+            $createTextNode('link2'),
+          ),
+        );
+        $getRoot().clear().append(paragraph);
+        paragraph.select(1, 1);
+      },
+      {discrete: true},
+    );
+    editor.read(() => {
+      const paragraph = $getRoot().getFirstChild();
+      assert($isParagraphNode(paragraph), 'Expected ParagraphNode');
+      expect(paragraph.getChildrenSize()).toBe(1);
+      const mergedLink = paragraph.getFirstChild();
+      assert($isLinkNode(mergedLink), 'Expected LinkNode');
+      const selection = $getSelection();
+      assert($isRangeSelection(selection), 'Expected RangeSelection');
+      expect(selection.isCollapsed()).toBe(true);
+      expect(selection.anchor.type).toBe('text');
+      expect(selection.anchor.key).toBe(textAKey);
+      expect(selection.anchor.offset).toBe(5);
+    });
+  });
+
+  test('#8305 edge case: first link ends with LineBreakNode', () => {
+    using editor = buildEditorFromExtensions(transformExtension);
+    editor.update(
+      () => {
+        const paragraph = $createParagraphNode().append(
+          $createLinkNode('https://lexical.dev').append(
+            $createTextNode('link1'),
+            $createLineBreakNode(),
+          ),
+          $createLinkNode('https://lexical.dev').append(
+            $createTextNode('link2'),
+          ),
+        );
+        $getRoot().clear().append(paragraph);
+        paragraph.select(1, 1);
+      },
+      {discrete: true},
+    );
+    editor.read(() => {
+      const paragraph = $getRoot().getFirstChild();
+      assert($isParagraphNode(paragraph), 'Expected ParagraphNode');
+      expect(paragraph.getChildrenSize()).toBe(1);
+      const mergedLink = paragraph.getFirstChild();
+      assert($isLinkNode(mergedLink), 'Expected LinkNode');
+      const selection = $getSelection();
+      assert($isRangeSelection(selection), 'Expected RangeSelection');
+      expect(selection.isCollapsed()).toBe(true);
+      expect(selection.anchor.type).toBe('text');
+      expect(selection.anchor.offset).toBe(0);
     });
   });
 });

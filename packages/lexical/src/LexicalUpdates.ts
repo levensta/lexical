@@ -23,10 +23,10 @@ import {
   EditorUpdateOptions,
   LexicalCommand,
   LexicalEditor,
+  MapListeners,
   MutatedNodes,
   RegisteredNodes,
   resetEditor,
-  SetListeners,
   Transform,
 } from './LexicalEditor';
 import {
@@ -748,21 +748,31 @@ function triggerMutationListeners(
   }
 }
 
-export function triggerListeners<T extends keyof SetListeners>(
+export function triggerListeners<T extends keyof MapListeners>(
   type: T,
   editor: LexicalEditor,
   isCurrentlyEnqueuingUpdates: boolean,
-  ...payload: SetListeners[T]
+  ...payload: MapListeners[T]
 ): void {
   const previouslyUpdating = editor._updating;
   editor._updating = isCurrentlyEnqueuingUpdates;
 
   try {
-    const listeners = Array.from(
-      editor._listeners[type] as Set<(...args: SetListeners[T]) => void>,
-    );
-    for (let i = 0; i < listeners.length; i++) {
-      listeners[i].apply(null, payload);
+    const listenerMap = editor._listeners[type] as Map<
+      (...args: MapListeners[T]) => void | undefined | (() => void),
+      void | undefined | (() => void)
+    >;
+    const listeners = Array.from(listenerMap);
+    for (const [listener, unregister] of listeners) {
+      if (unregister) {
+        unregister();
+      }
+      const nextUnregister = listener(...payload);
+      if (listenerMap.has(listener)) {
+        listenerMap.set(listener, nextUnregister);
+      } else if (nextUnregister) {
+        nextUnregister();
+      }
     }
   } finally {
     editor._updating = previouslyUpdating;
@@ -775,12 +785,21 @@ export function triggerCommandListeners<
   editor: LexicalEditor,
   type: TCommand,
   payload: CommandPayloadType<TCommand>,
+  fromEditor: LexicalEditor,
 ): boolean {
   const editors = getEditorsToPropagate(editor);
+  let updatingParentEditor: undefined | LexicalEditor;
 
   for (let i = 4; i >= 0; i--) {
     for (let e = 0; e < editors.length; e++) {
       const currentEditor = editors[e];
+      if (e > 0 && currentEditor._updating) {
+        // We can't synchronously update an already updating editor without
+        // creating an early commit that will potentially corrupt the
+        // nodeMap by doing GC too early.
+        updatingParentEditor = currentEditor;
+        break;
+      }
       const commandListeners = currentEditor._commands;
       const listenerInPriorityOrder = commandListeners.get(type);
 
@@ -794,7 +813,7 @@ export function triggerCommandListeners<
           let returnVal = false;
           updateEditorSync(currentEditor, () => {
             for (let j = 0; j < listenersLength; j++) {
-              if (listeners[j](payload, editor)) {
+              if (listeners[j](payload, fromEditor)) {
                 returnVal = true;
                 return;
               }
@@ -806,6 +825,14 @@ export function triggerCommandListeners<
         }
       }
     }
+  }
+  if (updatingParentEditor) {
+    // Preserve the fairly broken legacy semantics of command delegation to fix
+    // https://github.com/facebook/lexical/issues/8306
+    updatingParentEditor.update(() => {
+      // This will be async so we can't know the result
+      triggerCommandListeners(updatingParentEditor, type, payload, fromEditor);
+    });
   }
 
   return false;

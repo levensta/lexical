@@ -11,18 +11,21 @@ import type {JSX} from 'react';
 import 'katex/dist/katex.css';
 
 import {useLexicalComposerContext} from '@lexical/react/LexicalComposerContext';
-import {$wrapNodeInElement} from '@lexical/utils';
+import {
+  $insertNodeIntoLeaf,
+  $insertNodeToNearestRoot,
+  $wrapNodeInElement,
+} from '@lexical/utils';
 import {
   $createParagraphNode,
-  $insertNodes,
   $isRootOrShadowRoot,
   COMMAND_PRIORITY_EDITOR,
   createCommand,
   LexicalCommand,
   LexicalEditor,
 } from 'lexical';
-import {useCallback, useEffect} from 'react';
 import * as React from 'react';
+import {useCallback, useEffect} from 'react';
 
 import {$createEquationNode, EquationNode} from '../../nodes/EquationNode';
 import KatexEquationAlterer from '../../ui/KatexEquationAlterer';
@@ -69,9 +72,13 @@ export default function EquationsPlugin(): JSX.Element | null {
         const {equation, inline} = payload;
         const equationNode = $createEquationNode(equation, inline);
 
-        $insertNodes([equationNode]);
-        if ($isRootOrShadowRoot(equationNode.getParentOrThrow())) {
-          $wrapNodeInElement(equationNode, $createParagraphNode).selectEnd();
+        if (inline) {
+          $insertNodeIntoLeaf(equationNode);
+          if ($isRootOrShadowRoot(equationNode.getParent())) {
+            $wrapNodeInElement(equationNode, $createParagraphNode).selectEnd();
+          }
+        } else {
+          $insertNodeToNearestRoot(equationNode);
         }
 
         return true;

@@ -6,7 +6,6 @@
  *
  */
 
-/* eslint-disable no-constant-condition */
 import type {
   EditorConfig,
   Klass,
@@ -549,6 +548,17 @@ export class LexicalNode {
       this.__state = prevNode.__state;
     } else if (prevNode.__state) {
       this.__state = prevNode.__state.getWritable(this);
+    }
+  }
+
+  /**
+   * Reset state in this copy of originalNode, if necessary
+   *
+   * @param originalNode
+   */
+  resetOnCopyNodeFrom(originalNode: this): void {
+    if (this.__state) {
+      this.__state = this.__state.getWritable(this).resetOnCopyNode();
     }
   }
 
@@ -1123,7 +1133,6 @@ export class LexicalNode {
    *
    * */
   exportJSON(): SerializedLexicalNode {
-    // eslint-disable-next-line dot-notation
     const state = this.__state ? this.__state.toJSON() : undefined;
     return {
       type: this.__type,

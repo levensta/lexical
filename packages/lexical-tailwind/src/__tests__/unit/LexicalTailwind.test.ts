@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  *
  */
-/* eslint-disable no-shadow */
 
 import {buildEditorFromExtensions} from '@lexical/extension';
 import {TailwindExtension} from '@lexical/tailwind';
@@ -16,7 +15,7 @@ import {describe, it} from 'vitest';
 describe('TailwindExtension', () => {
   it('applies the expected classes', () => {
     const container = document.createElement('div');
-    const editor = buildEditorFromExtensions({
+    using _editor = buildEditorFromExtensions({
       $initialEditorState() {
         $getRoot().append(
           $createParagraphNode().append(
@@ -39,6 +38,5 @@ describe('TailwindExtension', () => {
         </p>
       `,
     );
-    editor.dispose();
   });
 });

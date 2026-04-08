@@ -33,6 +33,11 @@ export class DecoratorBlockNode extends DecoratorNode<JSX.Element> {
     this.__format = format || '';
   }
 
+  afterCloneFrom(prevNode: this): void {
+    super.afterCloneFrom(prevNode);
+    this.__format = prevNode.__format;
+  }
+
   exportJSON(): SerializedDecoratorBlockNode {
     return {
       ...super.exportJSON(),
@@ -64,6 +69,10 @@ export class DecoratorBlockNode extends DecoratorNode<JSX.Element> {
     const self = this.getWritable();
     self.__format = format;
     return self;
+  }
+
+  getFormat(): ElementFormatType {
+    return this.getLatest().__format;
   }
 
   isInline(): false {

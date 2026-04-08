@@ -7,12 +7,20 @@
  */
 
 import {$createLinkNode} from '@lexical/link';
-import {$createListItemNode, $createListNode} from '@lexical/list';
+import {
+  $createListItemNode,
+  $createListNode,
+  ListItemNode,
+  ListNode,
+} from '@lexical/list';
+import {UNORDERED_LIST} from '@lexical/markdown';
 import {AutoFocusPlugin} from '@lexical/react/LexicalAutoFocusPlugin';
 import {useLexicalComposerContext} from '@lexical/react/LexicalComposerContext';
 import {ContentEditable} from '@lexical/react/LexicalContentEditable';
 import {LexicalErrorBoundary} from '@lexical/react/LexicalErrorBoundary';
 import {HistoryPlugin} from '@lexical/react/LexicalHistoryPlugin';
+import {ListPlugin} from '@lexical/react/LexicalListPlugin';
+import {MarkdownShortcutPlugin} from '@lexical/react/LexicalMarkdownShortcutPlugin';
 import {RichTextPlugin} from '@lexical/react/LexicalRichTextPlugin';
 import {$createHeadingNode} from '@lexical/rich-text';
 import {
@@ -30,6 +38,7 @@ import {
   $getRoot,
   $getSelection,
   $isElementNode,
+  $isLineBreakNode,
   $isRangeSelection,
   $isTextNode,
   $setSelection,
@@ -47,6 +56,8 @@ import {
   $createTestDecoratorNode,
   $createTestElementNode,
   createTestEditor,
+  expectHtmlToBeEqual,
+  html,
   initializeClipboard,
   invariant,
   TestComposer,
@@ -144,7 +155,7 @@ describe('LexicalSelection tests', () => {
       return (
         <TestComposer
           config={{
-            nodes: [],
+            nodes: [ListNode, ListItemNode],
             theme: {
               code: 'editor-code',
               heading: {
@@ -177,7 +188,7 @@ describe('LexicalSelection tests', () => {
           }}>
           <RichTextPlugin
             contentEditable={
-              // eslint-disable-next-line jsx-a11y/aria-role, @typescript-eslint/no-explicit-any
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               <ContentEditable role={null as any} spellCheck={null as any} />
             }
             placeholder={null}
@@ -186,6 +197,8 @@ describe('LexicalSelection tests', () => {
           <HistoryPlugin />
           <TestPlugin />
           <AutoFocusPlugin />
+          <ListPlugin />
+          <MarkdownShortcutPlugin transformers={[UNORDERED_LIST]} />
         </TestComposer>
       );
     }
@@ -215,6 +228,142 @@ describe('LexicalSelection tests', () => {
   test('Expect initial output to be a block with no text.', () => {
     expect(container!.innerHTML).toBe(
       '<div contenteditable="true" style="user-select: text; white-space: pre-wrap; word-break: break-word;" data-lexical-editor="true"><p class="editor-paragraph" dir="auto"><br></p></div>',
+    );
+  });
+
+  test('Bold format preserved when typing between consecutive line breaks', async () => {
+    await applySelectionInputs(
+      [formatBold(), insertText('hello')],
+      update,
+      editor!,
+    );
+
+    // Move cursor between "he" and "llo"
+    await update(() => {
+      const paragraph = $getRoot().getFirstChildOrThrow();
+      invariant($isElementNode(paragraph));
+      const textNode = paragraph.getFirstChildOrThrow();
+      invariant($isTextNode(textNode));
+      textNode.select(2, 2);
+    });
+
+    // Shift+Enter twice (logical line breaks)
+    await update(() => {
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        selection.insertLineBreak();
+        selection.insertLineBreak();
+      }
+    });
+
+    // Move cursor between the two <br> nodes in the paragraph
+    await update(() => {
+      const paragraph = $getRoot().getFirstChildOrThrow();
+      invariant($isElementNode(paragraph));
+      const children = paragraph.getChildren();
+      let betweenOffset: null | number = null;
+
+      for (let i = 0; i < children.length - 1; i++) {
+        if (
+          $isLineBreakNode(children[i]) &&
+          $isLineBreakNode(children[i + 1])
+        ) {
+          betweenOffset = i + 1;
+          break;
+        }
+      }
+
+      if (betweenOffset === null) {
+        throw new Error('Expected to find consecutive line breaks');
+      }
+
+      paragraph.select(betweenOffset, betweenOffset);
+    });
+
+    await applySelectionInputs([insertText('x')], update, editor!);
+
+    editor!.getEditorState().read(() => {
+      const xNode = $getRoot()
+        .getAllTextNodes()
+        .find((node) => node.getTextContent() === 'x');
+      expect(xNode).toBeDefined();
+      expect(xNode!.hasFormat('bold')).toBe(true);
+    });
+  });
+
+  test('Ctrl+Backspace deletes list created by typing "- "', async () => {
+    await applySelectionInputs(
+      [insertText('-'), insertText(' ')],
+      update,
+      editor!,
+    );
+    expect(container!.innerHTML).toBe(
+      '<div contenteditable="true" style="user-select: text; white-space: pre-wrap; word-break: break-word;" data-lexical-editor="true"><ul class="editor-list-ul" dir="auto"><li value="1"><br></li></ul></div>',
+    );
+
+    await applySelectionInputs([deleteWordBackward(1)], update, editor!);
+    expect(container!.innerHTML).toBe(
+      '<div contenteditable="true" style="user-select: text; white-space: pre-wrap; word-break: break-word;" data-lexical-editor="true"><p class="editor-paragraph" dir="auto"><br></p></div>',
+    );
+
+    await applySelectionInputs(
+      [
+        insertText('preceding paragraph'),
+        insertParagraph(),
+        insertText('-'),
+        insertText(' '),
+        insertParagraph(),
+      ],
+      update,
+      editor!,
+    );
+    expectHtmlToBeEqual(
+      container!.innerHTML,
+      html`
+        <div
+          contenteditable="true"
+          style="user-select: text; white-space: pre-wrap; word-break: break-word;"
+          data-lexical-editor="true">
+          <p class="editor-paragraph" dir="auto">
+            <span data-lexical-text="true">preceding paragraph</span>
+          </p>
+          <ul class="editor-list-ul" dir="auto">
+            <li value="1"><br /></li>
+            <li value="2"><br /></li>
+          </ul>
+        </div>
+      `,
+    );
+    await applySelectionInputs([deleteWordBackward(1)], update, editor!);
+    expectHtmlToBeEqual(
+      container!.innerHTML,
+      html`
+        <div
+          contenteditable="true"
+          style="user-select: text; white-space: pre-wrap; word-break: break-word;"
+          data-lexical-editor="true">
+          <p class="editor-paragraph" dir="auto">
+            <span data-lexical-text="true">preceding paragraph</span>
+          </p>
+          <ul class="editor-list-ul" dir="auto">
+            <li value="1"><br /></li>
+          </ul>
+        </div>
+      `,
+    );
+    await applySelectionInputs([deleteWordBackward(1)], update, editor!);
+    expectHtmlToBeEqual(
+      container!.innerHTML,
+      html`
+        <div
+          contenteditable="true"
+          style="user-select: text; white-space: pre-wrap; word-break: break-word;"
+          data-lexical-editor="true">
+          <p class="editor-paragraph" dir="auto">
+            <span data-lexical-text="true">preceding paragraph</span>
+          </p>
+        </div>
+      `,
     );
   });
 

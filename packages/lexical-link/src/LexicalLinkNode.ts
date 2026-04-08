@@ -37,6 +37,7 @@ import {
   $isElementNode,
   $isNodeSelection,
   $isRangeSelection,
+  $isSiblingCaret,
   $normalizeCaret,
   $normalizeSelection__EXPERIMENTAL,
   $rewindSiblingCaret,
@@ -111,6 +112,14 @@ export class LinkNode extends ElementNode {
     this.__title = title;
   }
 
+  afterCloneFrom(prevNode: this): void {
+    super.afterCloneFrom(prevNode);
+    this.__url = prevNode.__url;
+    this.__rel = prevNode.__rel;
+    this.__target = prevNode.__target;
+    this.__title = prevNode.__title;
+  }
+
   createDOM(config: EditorConfig): LinkHTMLElementType {
     const element = document.createElement('a');
     this.updateLinkDOM(null, element, config);
@@ -176,7 +185,7 @@ export class LinkNode extends ElementNode {
     url = formatUrl(url);
     try {
       const parsedUrl = new URL(formatUrl(url));
-      // eslint-disable-next-line no-script-url
+
       if (!SUPPORTED_URL_PROTOCOLS.has(parsedUrl.protocol)) {
         return 'about:blank';
       }
@@ -240,11 +249,7 @@ export class LinkNode extends ElementNode {
     _: RangeSelection,
     restoreSelection = true,
   ): null | ElementNode {
-    const linkNode = $createLinkNode(this.__url, {
-      rel: this.__rel,
-      target: this.__target,
-      title: this.__title,
-    });
+    const linkNode = $copyNode(this);
     this.insertAfter(linkNode, restoreSelection);
     return linkNode;
   }
@@ -257,7 +262,7 @@ export class LinkNode extends ElementNode {
     return false;
   }
 
-  canBeEmpty(): false {
+  canBeEmpty(): boolean {
     return false;
   }
 
@@ -293,6 +298,16 @@ export class LinkNode extends ElementNode {
       this.__url.startsWith('https://') || this.__url.startsWith('http://')
     );
   }
+
+  shouldMergeAdjacentLink(otherLink: LinkNode): boolean {
+    return (
+      this.getType() === otherLink.getType() &&
+      this.__url === otherLink.__url &&
+      this.__target === otherLink.__target &&
+      this.__rel === otherLink.__rel &&
+      this.__title === otherLink.__title
+    );
+  }
 }
 
 type CaretPair = [PointCaret<'next'>, PointCaret<'previous'>];
@@ -325,7 +340,15 @@ export function $linkNodeTransform(link: LinkNode): void {
     anchorPair = $saveCaretPair(selection.anchor);
     focusPair = $saveCaretPair(selection.focus);
   }
+  function $restoreSelection(): void {
+    if ($isRangeSelection(selection)) {
+      $restoreCaretPair(selection.anchor, anchorPair!);
+      $restoreCaretPair(selection.focus, focusPair!);
+      $normalizeSelection__EXPERIMENTAL(selection);
+    }
+  }
 
+  let transformed = false;
   for (const caret of $getChildCaret(link, 'next')) {
     const node = caret.origin;
     if ($isElementNode(node) && !node.isInline()) {
@@ -334,13 +357,63 @@ export function $linkNodeTransform(link: LinkNode): void {
         const innerLink = $copyNode(link);
         innerLink.append(...blockChildren);
         node.append(innerLink);
+        transformed = true;
       }
       $insertNodeToNearestRootAtCaret(node, $rewindSiblingCaret(caret), {
         $shouldSplit: () => false,
       });
     }
   }
-  if (link.isEmpty()) {
+  // Fix a caret pair that points to the end of the absorbing link,
+  // which would shift when new children are appended during merge.
+  function $fixMergeBoundaryCaret(
+    pair: CaretPair,
+    absorbingLink: LinkNode,
+    mergingLink: LinkNode,
+  ): CaretPair {
+    const [next, prev] = pair;
+    const $isAffected = (caret: PointCaret) =>
+      $isSiblingCaret(caret) && caret.origin.is(absorbingLink);
+    if (!$isAffected(next) && !$isAffected(prev)) {
+      return pair;
+    }
+    // Resolve the merge boundary from the merging link's start, since
+    // those children survive the move and represent the boundary position.
+    const fixed = $normalizeCaret($getChildCaret(mergingLink, 'next'));
+    return [fixed, fixed.getFlipped()];
+  }
+
+  if (link.isAttached()) {
+    const prevSibling = link.getPreviousSibling();
+    if ($isLinkNode(prevSibling) && prevSibling.shouldMergeAdjacentLink(link)) {
+      if (anchorPair) {
+        anchorPair = $fixMergeBoundaryCaret(anchorPair, prevSibling, link);
+      }
+      if (focusPair) {
+        focusPair = $fixMergeBoundaryCaret(focusPair, prevSibling, link);
+      }
+      prevSibling.append(...link.getChildren());
+      link.remove();
+      $restoreSelection();
+      return;
+    }
+    const nextSibling = link.getNextSibling();
+    if ($isLinkNode(nextSibling) && link.shouldMergeAdjacentLink(nextSibling)) {
+      if (anchorPair) {
+        anchorPair = $fixMergeBoundaryCaret(anchorPair, link, nextSibling);
+      }
+      if (focusPair) {
+        focusPair = $fixMergeBoundaryCaret(focusPair, link, nextSibling);
+      }
+      link.append(...nextSibling.getChildren());
+      nextSibling.remove();
+      transformed = true;
+    }
+  }
+  if (!transformed) {
+    return;
+  }
+  if (!link.canBeEmpty() && link.isEmpty()) {
     const parent = link.getParent();
     link.remove();
     if (parent && parent.isEmpty()) {
@@ -348,11 +421,7 @@ export function $linkNodeTransform(link: LinkNode): void {
     }
   }
 
-  if ($isRangeSelection(selection)) {
-    $restoreCaretPair(selection.anchor, anchorPair!);
-    $restoreCaretPair(selection.focus, focusPair!);
-    $normalizeSelection__EXPERIMENTAL(selection);
-  }
+  $restoreSelection();
 }
 
 function $convertAnchorElement(domNode: Node): DOMConversionOutput {
@@ -420,6 +489,11 @@ export class AutoLinkNode extends LinkNode {
         : false;
   }
 
+  afterCloneFrom(prevNode: this): void {
+    super.afterCloneFrom(prevNode);
+    this.__isUnlinked = prevNode.__isUnlinked;
+  }
+
   static getType(): string {
     return 'autolink';
   }
@@ -435,6 +509,10 @@ export class AutoLinkNode extends LinkNode {
       },
       node.__key,
     );
+  }
+
+  shouldMergeAdjacentLink(_otherLink: LinkNode): boolean {
+    return false;
   }
 
   getIsUnlinked(): boolean {
@@ -647,11 +725,7 @@ function $splitLinkAtSelection(
 
     const trailingChildren = allChildren.slice(lastExtractedIndex + 1);
     if (trailingChildren.length > 0) {
-      const newLink = $createLinkNode(parentLink.getURL(), {
-        rel: parentLink.getRel(),
-        target: parentLink.getTarget(),
-        title: parentLink.getTitle(),
-      });
+      const newLink = $copyNode(parentLink);
 
       extractedChildren[extractedChildren.length - 1].insertAfter(newLink);
       trailingChildren.forEach((child) => newLink.append(child));

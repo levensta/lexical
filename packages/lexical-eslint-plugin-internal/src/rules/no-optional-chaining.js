@@ -6,16 +6,10 @@
  *
  */
 
-'use strict';
-
-//------------------------------------------------------------------------------
-// Rule Definition
-//------------------------------------------------------------------------------
-
 /** @type {import('eslint').Rule.RuleModule} */
-module.exports = {
+const rule = {
   create(context) {
-    const sourceCode = context.getSourceCode();
+    const sourceCode = context.sourceCode;
 
     /**
      * Checks if the given token is a `?.` token or not.
@@ -58,3 +52,5 @@ module.exports = {
     type: 'problem',
   },
 };
+
+export default rule;

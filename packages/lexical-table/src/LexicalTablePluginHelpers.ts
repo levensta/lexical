@@ -18,13 +18,11 @@ import {
 import {
   $createParagraphNode,
   $getNearestNodeFromDOMNode,
-  $getNodeByKey,
   $getPreviousSelection,
   $getRoot,
   $getSelection,
   $isElementNode,
   $isRangeSelection,
-  $isRootOrShadowRoot,
   $isTextNode,
   $setSelection,
   CLICK_COMMAND,
@@ -35,7 +33,6 @@ import {
   ElementNode,
   isDOMNode,
   LexicalEditor,
-  LexicalNode,
   NodeKey,
   RangeSelection,
   SELECT_ALL_COMMAND,
@@ -44,7 +41,6 @@ import {
 } from 'lexical';
 import invariant from 'shared/invariant';
 
-import {PIXEL_VALUE_REG_EXP} from './constants';
 import {
   $createTableCellNode,
   $isTableCellNode,
@@ -56,7 +52,7 @@ import {
 } from './LexicalTableCommands';
 import {TableConfig} from './LexicalTableExtension';
 import {$isTableNode, TableNode} from './LexicalTableNode';
-import {$getTableAndElementByKey, TableObserver} from './LexicalTableObserver';
+import {$getTableAndElementByKey, TableObservers} from './LexicalTableObserver';
 import {$isTableRowNode, TableRowNode} from './LexicalTableRowNode';
 import {
   $createTableSelectionFrom,
@@ -68,7 +64,6 @@ import {
   $handleTableSelectionChangeCommand,
   applyTableHandlers,
   getTableElement,
-  HTMLTableElementWithWithTableSelectionState,
   registerTableWindowHandlers,
 } from './LexicalTableSelectionHelpers';
 import {
@@ -328,10 +323,7 @@ export function registerTableSelectionObserver(
   editor: LexicalEditor,
   hasTabHandler: boolean = true,
 ): () => void {
-  const tableSelections = new Map<
-    NodeKey,
-    [TableObserver, HTMLTableElementWithWithTableSelectionState]
-  >();
+  const tableObservers = new TableObservers();
 
   const initializeTableNode = (
     tableNode: TableNode,
@@ -344,26 +336,17 @@ export function registerTableSelectionObserver(
       tableElement,
       editor,
       hasTabHandler,
+      tableObservers,
     );
-    tableSelections.set(nodeKey, [tableSelection, tableElement]);
+    tableObservers.observers.set(nodeKey, [tableSelection, tableElement]);
   };
 
   return mergeRegister(
-    registerTableWindowHandlers(editor, tableSelections),
+    registerTableWindowHandlers(editor, tableObservers),
     editor.registerCommand(
       SELECTION_CHANGE_COMMAND,
       () => {
-        for (const [tableObserver] of tableSelections.values()) {
-          const tableNode = $getNodeByKey<TableNode>(
-            tableObserver.tableNodeKey,
-          )!;
-          if (
-            $handleTableSelectionChangeCommand(tableObserver, tableNode, editor)
-          ) {
-            return true;
-          }
-        }
-        return false;
+        return $handleTableSelectionChangeCommand(tableObservers, editor);
       },
       COMMAND_PRIORITY_HIGH,
     ),
@@ -373,7 +356,7 @@ export function registerTableSelectionObserver(
         editor.getEditorState().read(
           () => {
             for (const [nodeKey, mutation] of nodeMutations) {
-              const tableSelection = tableSelections.get(nodeKey);
+              const tableSelection = tableObservers.observers.get(nodeKey);
               if (mutation === 'created' || mutation === 'updated') {
                 const {tableNode, tableElement} =
                   $getTableAndElementByKey(nodeKey);
@@ -382,13 +365,13 @@ export function registerTableSelectionObserver(
                 } else if (tableElement !== tableSelection[1]) {
                   // The update created a new DOM node, destroy the existing TableObserver
                   tableSelection[0].removeListeners();
-                  tableSelections.delete(nodeKey);
+                  tableObservers.observers.delete(nodeKey);
                   initializeTableNode(tableNode, nodeKey, tableElement);
                 }
               } else if (mutation === 'destroyed') {
                 if (tableSelection !== undefined) {
                   tableSelection[0].removeListeners();
-                  tableSelections.delete(nodeKey);
+                  tableObservers.observers.delete(nodeKey);
                 }
               }
             }
@@ -401,7 +384,7 @@ export function registerTableSelectionObserver(
     () => {
       // Hook might be called multiple times so cleaning up tables listeners as well,
       // as it'll be reinitialized during recurring call
-      for (const [, [tableSelection]] of tableSelections) {
+      for (const [, [tableSelection]] of tableObservers.observers) {
         tableSelection.removeListeners();
       }
     },
@@ -418,17 +401,13 @@ export function registerTableSelectionObserver(
  */
 export function registerTablePlugin(
   editor: LexicalEditor,
-  options?: Pick<
-    NamedSignalsOutput<TableConfig>,
-    'hasNestedTables' | 'hasFitNestedTables'
-  >,
+  options?: Pick<NamedSignalsOutput<TableConfig>, 'hasNestedTables'>,
 ): () => void {
   if (!editor.hasNodes([TableNode])) {
     invariant(false, 'TablePlugin: TableNode is not registered on editor');
   }
 
-  const {hasNestedTables = signal(false), hasFitNestedTables = signal(false)} =
-    options ?? {};
+  const {hasNestedTables = signal(false)} = options ?? {};
 
   return mergeRegister(
     editor.registerCommand(
@@ -464,27 +443,6 @@ export function registerTablePlugin(
     editor.registerNodeTransform(TableNode, $tableTransform),
     editor.registerNodeTransform(TableRowNode, $tableRowTransform),
     editor.registerNodeTransform(TableCellNode, $tableCellTransform),
-    editor.registerMutationListener(TableNode, (nodeMutations) => {
-      if (!hasFitNestedTables.peek()) {
-        return;
-      }
-
-      editor.getEditorState().read(() => {
-        const modifiedTables = new Set<TableNode>();
-        for (const [nodeKey, mutation] of nodeMutations) {
-          if (mutation === 'created' || mutation === 'updated') {
-            const tableNode = $getNodeByKey<TableNode>(nodeKey);
-            if (tableNode) {
-              modifiedTables.add(tableNode);
-            }
-          }
-        }
-        const resizeRoots = $calculateResizeRootTables(modifiedTables);
-        resizeRoots.forEach((root) => {
-          $resizeDOMColWidthsToFit(editor, root);
-        });
-      });
-    }),
   );
 }
 
@@ -733,115 +691,4 @@ function $isMultiCellTableSelection(
     return true;
   }
   return false;
-}
-
-/**
- * Returns horizontal insets of the given node (padding + border).
- *
- * @param dom - The DOM element to calculate the horizontal insets for.
- * @param editorWindow - The window object of the editor.
- * @returns The horizontal insets of the node, in pixels.
- */
-export function $calculateHorizontalInsets(
-  dom: HTMLElement,
-  editorWindow: Window,
-) {
-  const computedStyle = editorWindow.getComputedStyle(dom);
-  const paddingLeft = computedStyle.getPropertyValue('padding-left') || '0px';
-  const paddingRight = computedStyle.getPropertyValue('padding-right') || '0px';
-  const borderLeftWidth =
-    computedStyle.getPropertyValue('border-left-width') || '0px';
-  const borderRightWidth =
-    computedStyle.getPropertyValue('padding-right-width') || '0px';
-
-  if (
-    !PIXEL_VALUE_REG_EXP.test(paddingLeft) ||
-    !PIXEL_VALUE_REG_EXP.test(paddingRight) ||
-    !PIXEL_VALUE_REG_EXP.test(borderLeftWidth) ||
-    !PIXEL_VALUE_REG_EXP.test(borderRightWidth)
-  ) {
-    return 0;
-  }
-  const paddingLeftPx = parseFloat(paddingLeft);
-  const paddingRightPx = parseFloat(paddingRight);
-  const borderLeftWidthPx = parseFloat(borderLeftWidth);
-  const borderRightWidthPx = parseFloat(borderRightWidth);
-
-  return (
-    paddingLeftPx + paddingRightPx + borderLeftWidthPx + borderRightWidthPx
-  );
-}
-
-function getTotalTableWidth(colWidths: readonly number[]) {
-  return colWidths.reduce((curWidth, width) => curWidth + width, 0);
-}
-
-// Returns the subset of tables that are not contained by any of the other tables in
-// the input.
-function $calculateResizeRootTables(tables: ReadonlySet<TableNode>) {
-  const inputTables: ReadonlySet<LexicalNode> = tables;
-  const roots: TableNode[] = [];
-  for (const table of tables) {
-    if (
-      $findMatchingParent(table, (n) => n !== table && inputTables.has(n)) ===
-      null
-    ) {
-      roots.push(table);
-    }
-  }
-  return roots;
-}
-
-/**
- * Recursively scales the DOM colWidths of all tables starting from the given node.
- * Each table will be scaled to fit the nearest root or shadow root.
- *
- * @param editor the editor instance
- * @param node the table node to resize. The table must have colWidths to be resized
- */
-function $resizeDOMColWidthsToFit(editor: LexicalEditor, node: TableNode) {
-  const editorWindow = editor._window;
-  if (!editorWindow) {
-    return;
-  }
-  const allNestedTables = $dfs(node)
-    .map((n) => n.node)
-    .filter($isTableNode);
-  for (const table of allNestedTables) {
-    const element = editor.getElementByKey(table.getKey());
-    if (!element) {
-      continue;
-    }
-    const tableParent = table.getParent();
-    if (!tableParent) {
-      continue;
-    }
-    const parentShadowRoot = $findMatchingParent(
-      tableParent,
-      $isRootOrShadowRoot,
-    );
-    const fitContainer = parentShadowRoot
-      ? editor.getElementByKey(parentShadowRoot.getKey())
-      : editor.getRootElement();
-    if (!fitContainer) {
-      continue;
-    }
-
-    const oldColWidths = table.getColWidths();
-    if (!oldColWidths) {
-      continue;
-    }
-
-    const availableWidth = fitContainer.getBoundingClientRect().width;
-    const horizontalInsets = $calculateHorizontalInsets(
-      fitContainer,
-      editorWindow,
-    );
-    const usableWidth = availableWidth - horizontalInsets;
-    const tableWidth = getTotalTableWidth(oldColWidths);
-
-    const proportionalWidth = Math.min(1, usableWidth / tableWidth);
-
-    table.scaleDOMColWidths(element, proportionalWidth);
-  }
 }

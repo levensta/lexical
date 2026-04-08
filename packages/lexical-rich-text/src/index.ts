@@ -230,18 +230,23 @@ export class HeadingNode extends ElementNode {
     return new HeadingNode(node.__tag, node.__key);
   }
 
-  constructor(tag: HeadingTagType, key?: NodeKey) {
+  afterCloneFrom(prevNode: this): void {
+    super.afterCloneFrom(prevNode);
+    this.__tag = prevNode.__tag;
+  }
+
+  constructor(tag: HeadingTagType = 'h1', key?: NodeKey) {
     super(key);
     this.__tag = tag;
   }
 
   getTag(): HeadingTagType {
-    return this.__tag;
+    return this.getLatest().__tag;
   }
 
   setTag(tag: HeadingTagType): this {
     const self = this.getWritable();
-    this.__tag = tag;
+    self.__tag = tag;
     return self;
   }
 

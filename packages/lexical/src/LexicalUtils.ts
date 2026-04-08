@@ -696,11 +696,13 @@ export function doesContainSurrogatePair(str: string): boolean {
 export function getEditorsToPropagate(
   editor: LexicalEditor,
 ): Array<LexicalEditor> {
-  const editorsToPropagate = [];
-  let currentEditor: LexicalEditor | null = editor;
-  while (currentEditor !== null) {
+  const editorsToPropagate: LexicalEditor[] = [];
+  for (
+    let currentEditor: LexicalEditor | null = editor;
+    currentEditor !== null;
+    currentEditor = currentEditor._parentEditor
+  ) {
     editorsToPropagate.push(currentEditor);
-    currentEditor = currentEditor._parentEditor;
   }
   return editorsToPropagate;
 }
@@ -1353,7 +1355,7 @@ export function dispatchCommand<TCommand extends LexicalCommand<unknown>>(
   command: TCommand,
   payload: CommandPayloadType<TCommand>,
 ): boolean {
-  return triggerCommandListeners(editor, command, payload);
+  return triggerCommandListeners(editor, command, payload, editor);
 }
 
 export function getElementByKeyOrThrow(
@@ -1412,6 +1414,16 @@ export function scrollIntoViewIfNeeded(
     if (isBodyElement) {
       targetTop = 0;
       targetBottom = getWindow(editor).innerHeight;
+      // Account for CSS scroll-padding on the document element
+      const computedStyle = defaultView.getComputedStyle(doc.documentElement);
+      const scrollPaddingTop = parseFloat(computedStyle.scrollPaddingTop);
+      const scrollPaddingBottom = parseFloat(computedStyle.scrollPaddingBottom);
+      if (isFinite(scrollPaddingTop)) {
+        targetTop += scrollPaddingTop;
+      }
+      if (isFinite(scrollPaddingBottom)) {
+        targetBottom -= scrollPaddingBottom;
+      }
     } else {
       const targetRect = element.getBoundingClientRect();
       targetTop = targetRect.top;
@@ -1555,12 +1567,19 @@ export function $isRootOrShadowRoot(
  * separately added to the document, and it will not have any children.
  *
  * @param node - The node to be copied.
+ * @param skipReset - If true (default false) skip the call to resetOnCopyNodeFrom
  * @returns The copy of the node.
  */
-export function $copyNode<T extends LexicalNode>(node: T): T {
+export function $copyNode<T extends LexicalNode>(
+  node: T,
+  skipReset = false,
+): T {
   const copy = node.constructor.clone(node) as T;
   $setNodeKey(copy, null);
   copy.afterCloneFrom(node);
+  if (!skipReset) {
+    copy.resetOnCopyNodeFrom(node);
+  }
   return copy;
 }
 

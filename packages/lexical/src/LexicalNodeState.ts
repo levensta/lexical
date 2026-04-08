@@ -223,6 +223,11 @@ export interface StateValueConfig<V> {
    * more appropriate for your use case.
    */
   isEqual?: (a: V, b: V) => boolean;
+  /**
+   * When a node is copied with {@link $copyNode} (not cloned), reset this
+   * value to the default.
+   */
+  resetOnCopyNode?: boolean;
 }
 
 /**
@@ -251,6 +256,7 @@ export class StateConfig<K extends string, V> {
    * the `defaultValue`, it will not be serialized to JSON.
    */
   readonly defaultValue: V;
+  readonly resetOnCopyNode: boolean;
   constructor(key: K, stateValueConfig: StateValueConfig<V>) {
     this.key = key;
     this.parse = stateValueConfig.parse.bind(stateValueConfig);
@@ -261,6 +267,7 @@ export class StateConfig<K extends string, V> {
       stateValueConfig,
     );
     this.defaultValue = this.parse(undefined);
+    this.resetOnCopyNode = stateValueConfig.resetOnCopyNode || false;
   }
 }
 
@@ -693,6 +700,16 @@ export class NodeState<T extends LexicalNode> {
   }
 
   /** @internal */
+  resetOnCopyNode(): this {
+    for (const stateConfig of this.knownState.keys()) {
+      if (stateConfig.resetOnCopyNode) {
+        this.knownState.set(stateConfig, stateConfig.defaultValue);
+      }
+    }
+    return this;
+  }
+
+  /** @internal */
   updateFromKnown<K extends string, V>(
     stateConfig: StateConfig<K, V>,
     value: V,
@@ -844,9 +861,6 @@ export function nodeStatesAreEquivalent<T extends LexicalNode>(
 ): boolean {
   if (a === b) {
     return true;
-  }
-  if (a && b && a.size !== b.size) {
-    return false;
   }
   const keys = new Set<string>();
   return !(

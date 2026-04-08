@@ -7,6 +7,7 @@
  */
 
 import {
+  $copyNode,
   $createParagraphNode,
   $createTextNode,
   $getRoot,
@@ -386,6 +387,46 @@ describe('LexicalNode state', () => {
         test('undefined states are equivalent', () => {
           expect(nodeStatesAreEquivalent(undefined, undefined)).toBe(true);
         });
+        test('merges text nodes with different number of default state values', () => {
+          const {editor} = testEnv;
+          // Initialise with non-default state.
+          editor.update(
+            () => {
+              const firstTextNode = $createTextNode('hello');
+              const secondTextNode = $createTextNode('world');
+              $setState(firstTextNode, numberState, 1);
+              $setState(firstTextNode, boolState, true);
+              $setState(secondTextNode, boolState, true);
+              $getRoot()
+                .clear()
+                .append(
+                  $createParagraphNode().append(firstTextNode, secondTextNode),
+                );
+            },
+            {discrete: true},
+          );
+          editor.read(() => {
+            const textNodes = $getRoot().getAllTextNodes();
+            expect(textNodes).toHaveLength(2);
+          });
+          // Revert to default value for number state.
+          editor.update(
+            () => {
+              const paragraph =
+                $getRoot().getFirstChildOrThrow<ParagraphNode>();
+              const [firstTextNode] = paragraph.getChildren();
+              $setState(firstTextNode, numberState, 0);
+            },
+            {discrete: true},
+          );
+          // Test that the text nodes are merged.
+          editor.read(() => {
+            const textNodes = $getRoot().getAllTextNodes();
+            expect(textNodes).toHaveLength(1);
+            expect($getState(textNodes[0], numberState)).toBe(0);
+            expect($getState(textNodes[0], boolState)).toBe(true);
+          });
+        });
         test('TextNode merging only with equivalent state', () => {
           const {editor} = testEnv;
           const classNameState = createState('className', {
@@ -542,6 +583,116 @@ describe('LexicalNode state', () => {
               }
             }
           }
+        });
+      });
+
+      describe('resetOnCopyNode', () => {
+        test('state with resetOnCopyNode: true is reset when using $copyNode', () => {
+          const {editor} = testEnv;
+          const resetState = createState('resetState', {
+            parse: (v) => (typeof v === 'number' ? v : 0),
+            resetOnCopyNode: true,
+          });
+          editor.update(
+            () => {
+              const node = $createStateNode();
+              $setState(node, resetState, 42);
+              expect($getState(node, resetState)).toBe(42);
+
+              const copy = $copyNode(node);
+              expect($getState(copy, resetState)).toBe(0);
+              expect($getState(node, resetState)).toBe(42);
+            },
+            {discrete: true},
+          );
+        });
+
+        test('state with resetOnCopyNode: false is preserved when using $copyNode', () => {
+          const {editor} = testEnv;
+          const persistState = createState('persistState', {
+            parse: (v) => (typeof v === 'number' ? v : 0),
+            resetOnCopyNode: false,
+          });
+          editor.update(
+            () => {
+              const node = $createStateNode();
+              $setState(node, persistState, 42);
+              expect($getState(node, persistState)).toBe(42);
+
+              const copy = $copyNode(node);
+              expect($getState(copy, persistState)).toBe(42);
+              expect($getState(node, persistState)).toBe(42);
+            },
+            {discrete: true},
+          );
+        });
+
+        test('state without resetOnCopyNode option is preserved when using $copyNode', () => {
+          const {editor} = testEnv;
+          const defaultState = createState('defaultState', {
+            parse: (v) => (typeof v === 'number' ? v : 0),
+          });
+          editor.update(
+            () => {
+              const node = $createStateNode();
+              $setState(node, defaultState, 42);
+              expect($getState(node, defaultState)).toBe(42);
+
+              const copy = $copyNode(node);
+              expect($getState(copy, defaultState)).toBe(42);
+              expect($getState(node, defaultState)).toBe(42);
+            },
+            {discrete: true},
+          );
+        });
+
+        test('multiple states with different resetOnCopyNode configurations', () => {
+          const {editor} = testEnv;
+          const resetState = createState('resetState', {
+            parse: (v) => (typeof v === 'number' ? v : 0),
+            resetOnCopyNode: true,
+          });
+          const persistState = createState('persistState', {
+            parse: (v) => (typeof v === 'string' ? v : ''),
+            resetOnCopyNode: false,
+          });
+          const defaultState = createState('defaultState', {
+            parse: (v) => (typeof v === 'boolean' ? v : false),
+          });
+
+          editor.update(
+            () => {
+              const node = $createStateNode();
+              $setState(node, resetState, 100);
+              $setState(node, persistState, 'hello');
+              $setState(node, defaultState, true);
+
+              expect($getState(node, resetState)).toBe(100);
+              expect($getState(node, persistState)).toBe('hello');
+              expect($getState(node, defaultState)).toBe(true);
+
+              const copy = $copyNode(node);
+              expect($getState(copy, resetState)).toBe(0);
+              expect($getState(copy, persistState)).toBe('hello');
+              expect($getState(copy, defaultState)).toBe(true);
+
+              // Original node should be unchanged
+              expect($getState(node, resetState)).toBe(100);
+              expect($getState(node, persistState)).toBe('hello');
+              expect($getState(node, defaultState)).toBe(true);
+
+              const fullCopy = $copyNode(node, true);
+              // Original node should be unchanged
+              expect($getState(node, resetState)).toBe(100);
+              expect($getState(node, persistState)).toBe('hello');
+              expect($getState(node, defaultState)).toBe(true);
+              // Full copy should match all properties
+              expect($getState(fullCopy, resetState)).toBe(100);
+              expect($getState(fullCopy, persistState)).toBe('hello');
+              expect($getState(fullCopy, defaultState)).toBe(true);
+            },
+            {discrete: true},
+          );
         });
       });
     },
