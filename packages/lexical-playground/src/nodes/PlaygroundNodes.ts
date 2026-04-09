@@ -22,6 +22,9 @@ import {CollapsibleContainerNode} from '../plugins/CollapsiblePlugin/Collapsible
 import {CollapsibleContentNode} from '../plugins/CollapsiblePlugin/CollapsibleContentNode';
 import {CollapsibleTitleNode} from '../plugins/CollapsiblePlugin/CollapsibleTitleNode';
 import {AutocompleteNode} from './AutocompleteNode';
+import {ContentsItemNode} from './ContentsItemNode';
+import {ContentsLinkNode} from './ContentsLinkNode';
+import {ContentsListNode} from './ContentsListNode';
 import {DateTimeNode} from './DateTimeNode/DateTimeNode';
 import {EmojiNode} from './EmojiNode';
 import {EquationNode} from './EquationNode';
@@ -71,6 +74,9 @@ const PlaygroundNodes: Array<Klass<LexicalNode>> = [
   CollapsibleContentNode,
   CollapsibleTitleNode,
   PageBreakNode,
+  ContentsListNode,
+  ContentsItemNode,
+  ContentsLinkNode,
   LayoutContainerNode,
   LayoutItemNode,
   SpecialTextNode,

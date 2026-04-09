@@ -609,6 +609,10 @@ i.page-break,
   background-image: url(images/icons/scissors.svg);
 }
 
+i.toc {
+  background-image: url(images/icons/list-nested.svg);
+}
+
 .link-editor .button.active,
 .toolbar .button.active {
   background-color: rgb(223, 232, 250);
