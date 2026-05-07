@@ -128,6 +128,11 @@ export {
   type TabIndentationConfig,
   TabIndentationExtension,
 } from './TabIndentationExtension';
+export {
+  registerTouchIndentation,
+  type TouchIndentationConfig,
+  TouchIndentationExtension,
+} from './TouchIndentationExtension';
 export {WatchEditableExtension} from './WatchEditableExtension';
 export {watchedSignal} from './watchedSignal';
 export {
