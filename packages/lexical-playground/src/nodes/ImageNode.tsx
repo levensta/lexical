@@ -28,7 +28,7 @@ import {
 } from '@lexical/extension';
 import {HashtagExtension} from '@lexical/hashtag';
 import {HistoryExtension} from '@lexical/history';
-import {$generateHtmlFromNodes, $generateNodesFromDOM} from '@lexical/html';
+import {$generateDOMFromNodes, $generateNodesFromDOM} from '@lexical/html';
 import {LinkExtension} from '@lexical/link';
 import {ReactExtension} from '@lexical/react/ReactExtension';
 import {ReactProviderExtension} from '@lexical/react/ReactProviderExtension';
@@ -213,8 +213,8 @@ export class ImageNode extends DecoratorNode<JSX.Element> {
 
     if (this.__showCaption && this.__caption) {
       const captionEditor = this.__caption;
-      const captionHtml = captionEditor.read(() => {
-        if ($isCaptionEditorEmpty()) {
+      const figcaptionElement = captionEditor.read(() => {
+        if ($getRoot().getTextContentSize() === 0) {
           return null;
         }
         // Don't serialize the wrapping paragraph if there is only one
@@ -232,15 +232,15 @@ export class ImageNode extends DecoratorNode<JSX.Element> {
             'element',
           );
         }
-        return $generateHtmlFromNodes(captionEditor, selection);
+        return $generateDOMFromNodes(
+          document.createElement('figcaption'),
+          selection,
+          captionEditor,
+        );
       });
-      if (captionHtml) {
+      if (figcaptionElement) {
         const figureElement = document.createElement('figure');
-        const figcaptionElement = document.createElement('figcaption');
-        figcaptionElement.innerHTML = captionHtml;
-
-        figureElement.appendChild(imgElement);
-        figureElement.appendChild(figcaptionElement);
+        figureElement.append(imgElement, figcaptionElement);
 
         return {element: figureElement};
       }
