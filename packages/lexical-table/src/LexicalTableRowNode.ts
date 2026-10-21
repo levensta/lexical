@@ -6,22 +6,31 @@
  *
  */
 
-import type {BaseSelection, LexicalUpdateJSON, Spread} from 'lexical';
-
-import {$descendantsMatching, addClassNamesToElement} from '@lexical/utils';
+import {$descendantsMatching} from '@lexical/utils';
 import {
   $applyNodeReplacement,
-  DOMConversionMap,
-  DOMConversionOutput,
-  EditorConfig,
+  $getDocument,
+  $setDirectionFromDOM,
+  addClassNamesToElement,
+  type BaseSelection,
+  type DOMConversionOutput,
+  type EditorConfig,
   ElementNode,
-  LexicalNode,
-  NodeKey,
-  SerializedElementNode,
+  type LexicalNode,
+  type LexicalParseJSON,
+  type NodeKey,
+  nodeSchema,
+  numberValue,
+  optional,
+  type SerializedElementNode,
+  type SerializedPartial,
+  type Spread,
+  withField,
 } from 'lexical';
 
 import {PIXEL_VALUE_REG_EXP} from './constants';
 import {$isTableCellNode} from './LexicalTableCellNode';
+import {GENERATED_TABLEROW} from './LexicalTableGeneratedJSON';
 
 export type SerializedTableRowNode = Spread<
   {
@@ -30,60 +39,50 @@ export type SerializedTableRowNode = Spread<
   SerializedElementNode
 >;
 
+const tableRowNodeSchema = nodeSchema<TableRowNode>()({
+  height: withField(optional(numberValue()), {
+    field: '__height',
+  }),
+});
+
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface TableRowNode {
+  exportJSON(compact?: false): SerializedTableRowNode;
+  exportJSON(compact: boolean): SerializedPartial<SerializedTableRowNode>;
+  updateFromJSON(
+    serializedNode: LexicalParseJSON<SerializedTableRowNode>,
+  ): this;
+}
+
 /** @noInheritDoc */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class TableRowNode extends ElementNode {
   /** @internal */
   __height?: number;
 
-  static getType(): string {
-    return 'tablerow';
+  $config() {
+    return this.config('tablerow', {
+      extends: ElementNode,
+      generated: GENERATED_TABLEROW,
+      importDOM: {
+        tr: () => ({
+          conversion: $convertTableRowElement,
+          priority: 0,
+        }),
+      },
+      json: tableRowNodeSchema,
+    });
   }
 
-  static clone(node: TableRowNode): TableRowNode {
-    return new TableRowNode(node.__height, node.__key);
-  }
-
-  afterCloneFrom(prevNode: this): void {
-    super.afterCloneFrom(prevNode);
-    this.__height = prevNode.__height;
-  }
-
-  static importDOM(): DOMConversionMap | null {
-    return {
-      tr: (node: Node) => ({
-        conversion: $convertTableRowElement,
-        priority: 0,
-      }),
-    };
-  }
-
-  static importJSON(serializedNode: SerializedTableRowNode): TableRowNode {
-    return $createTableRowNode().updateFromJSON(serializedNode);
-  }
-
-  updateFromJSON(
-    serializedNode: LexicalUpdateJSON<SerializedTableRowNode>,
-  ): this {
-    return super
-      .updateFromJSON(serializedNode)
-      .setHeight(serializedNode.height);
-  }
-
-  constructor(height?: number, key?: NodeKey) {
+  // `height` carries an explicit `undefined` default so the constructor reports
+  // zero required arguments and `$config` can synthesize the static `clone`.
+  constructor(height: number | undefined = undefined, key?: NodeKey) {
     super(key);
     this.__height = height;
   }
 
-  exportJSON(): SerializedTableRowNode {
-    const height = this.getHeight();
-    return {
-      ...super.exportJSON(),
-      ...(height === undefined ? undefined : {height}),
-    };
-  }
-
   createDOM(config: EditorConfig): HTMLElement {
-    const element = document.createElement('tr');
+    const element = $getDocument().createElement('tr');
 
     if (this.__height) {
       element.style.height = `${this.__height}px`;
@@ -139,7 +138,7 @@ export function $convertTableRowElement(domNode: Node): DOMConversionOutput {
 
   return {
     after: children => $descendantsMatching(children, $isTableCellNode),
-    node: $createTableRowNode(height),
+    node: $setDirectionFromDOM($createTableRowNode(height), domNode_),
   };
 }
 

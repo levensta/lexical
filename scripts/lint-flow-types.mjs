@@ -14,6 +14,18 @@ import ts from 'typescript';
 
 import {packagesManager} from './shared/packagesManager.mjs';
 
+/** @typedef {import('./shared/PackageMetadata.mjs').PackageMetadata} PackageMetadata */
+
+/**
+ * The subset of a hermes-estree `Identifier` node that this script reads. The
+ * full node is an untyped AST value (hermes-estree ships no types), so only the
+ * fields consumed when reporting missing TypeScript declarations are described.
+ *
+ * @typedef {Object} FlowIdentifier
+ * @property {string} name
+ * @property {{source: string, start: {line: number, column: number}}} loc
+ */
+
 const pretty = process.env.CI !== 'true';
 
 /** @type {ts.FormatDiagnosticsHost} */
@@ -40,8 +52,29 @@ function lintFlowTypes() {
   }
 }
 
-function collectFlowExports(flowAst) {
+/**
+ * Collect the names and identifier nodes of every export declared in a parsed
+ * .flow AST, following `export * from` the way the TypeScript side follows it.
+ *
+ * A barrel that re-exports its entry points by name has to name each one
+ * twice, and a name added to an entry point is a name the barrel silently
+ * stops having. `@lexical/compiler`'s barrel drifted that way, so the Flow
+ * barrels spell it `export *` as their `src/index.ts` does, and this resolves
+ * it: `resolve` maps the specifier to the `.js.flow` that declares it, and the
+ * names it exports are collected as if written here. Cyclic and unresolvable
+ * specifiers are skipped rather than failing, since a barrel may also
+ * re-export a package this one does not own.
+ *
+ * @param {any} flowAst the untyped hermes-parser AST of a .flow file
+ * @param {(specifier: string) => string | null} resolve the .js.flow path a
+ *   specifier names, or null where there is none to read
+ * @param {Set<string>} [seen] the files already walked, for the cycle guard
+ * @returns {Map<string, FlowIdentifier>}
+ */
+function collectFlowExports(flowAst, resolve = () => null, seen = new Set()) {
+  /** @type {Map<string, FlowIdentifier>} */
   const exportNames = new Map();
+  /** @param {any} node an untyped hermes-estree AST node */
   const exportId = node => {
     const identifier =
       node.type === 'Identifier'
@@ -56,7 +89,27 @@ function collectFlowExports(flowAst) {
     return false;
   };
   hermesParser.SimpleTraverser.traverse(flowAst, {
+    /**
+     * @param {any} node an untyped hermes-estree AST node
+     * @param {any} parent the untyped parent AST node, if any
+     */
     enter: (node, parent) => {
+      if (node.type === 'ExportAllDeclaration' && node.source) {
+        const from = resolve(node.source.value);
+        if (from !== null && !seen.has(from)) {
+          seen.add(from);
+          const ast = hermesParser.parse(fs.readFileSync(from, 'utf-8'), {
+            enableExperimentalComponentSyntax: true,
+            flow: 'all',
+            sourceFilename: from,
+            sourceType: 'module',
+          });
+          for (const [name, id] of collectFlowExports(ast, resolve, seen)) {
+            exportNames.set(name, id);
+          }
+        }
+        return;
+      }
       if (
         parent &&
         (parent.type === 'DeclareExportDeclaration' ||
@@ -89,7 +142,8 @@ function compareFlowDts(
   /** @type {string} */ flowFilePath,
   /** @type {tsMorph.SourceFile} */ entrypoint,
   /** @type {ts.Diagnostic[]} */ diagnostics,
-  /** @type {import('hermes-estree').Identifier[]} */ flowDiagnostics,
+  /** @type {FlowIdentifier[]} */ flowDiagnostics,
+  /** @type {(specifier: string) => string | null} */ resolveFlow = () => null,
 ) {
   const flowAst = hermesParser.parse(fs.readFileSync(flowFilePath, 'utf-8'), {
     enableExperimentalComponentSyntax: true,
@@ -97,7 +151,11 @@ function compareFlowDts(
     sourceFilename: flowFilePath,
     sourceType: 'module',
   });
-  const flowMap = collectFlowExports(flowAst);
+  const flowMap = collectFlowExports(
+    flowAst,
+    resolveFlow,
+    new Set([flowFilePath]),
+  );
   const symbols = entrypoint.getExportSymbols();
   const tsMap = new Map(symbols.map(sym => [sym.getName(), sym]));
   for (const [name, symbol] of tsMap) {
@@ -137,8 +195,29 @@ function lintFlowTypesForPackage(
   }
   /** @type {ts.Diagnostic[]} */
   const diagnostics = [];
-  /** @type {import('hermes-estree').Identifier[]} */
+  /** @type {FlowIdentifier[]} */
   const flowDiagnostics = [];
+  // Where a barrel says `export * from '@lexical/compiler/SomePass'`, this is
+  // what finds the pass's own declarations: the same module list the barrel's
+  // entry points come from, keyed by the source file each entry is built from,
+  // which is the last segment of the specifier that names it.
+  const npmName = pkg.getNpmName();
+  const flowBySource = new Map(
+    def.modules.map(m => [
+      m.sourceFileName.replace(/\.tsx?$/, ''),
+      pkg.resolve('flow', `${m.outputFileName}.js.flow`),
+    ]),
+  );
+  const resolveFlow = (/** @type {string} */ specifier) => {
+    // Only this package's own entry points: a barrel may also re-export a
+    // package this one does not own, whose declarations are not ours to read.
+    if (specifier !== npmName && !specifier.startsWith(`${npmName}/`)) {
+      return null;
+    }
+    const subpath = specifier.slice(npmName.length).replace(/^\//, '');
+    const resolved = flowBySource.get(subpath === '' ? 'index' : subpath);
+    return resolved !== undefined && fs.existsSync(resolved) ? resolved : null;
+  };
   for (const {outputFileName, sourceFileName} of def.modules) {
     const entrypoint = project.addSourceFileAtPath(
       pkg.resolve('src', sourceFileName),
@@ -148,7 +227,14 @@ function lintFlowTypesForPackage(
       console.error(`Missing ${flowFilePath}`);
       process.exit(1);
     }
-    compareFlowDts(pkg, flowFilePath, entrypoint, diagnostics, flowDiagnostics);
+    compareFlowDts(
+      pkg,
+      flowFilePath,
+      entrypoint,
+      diagnostics,
+      flowDiagnostics,
+      resolveFlow,
+    );
   }
   if (diagnostics.length > 0 || flowDiagnostics.length > 0) {
     const msg = (

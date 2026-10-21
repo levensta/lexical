@@ -8,7 +8,7 @@
     "headless"
   ],
   "license": "MIT",
-  "version": "0.44.0",
+  "version": "0.52.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/facebook/lexical.git",
@@ -16,45 +16,79 @@
   },
   "sideEffects": false,
   "exports": {
+    "./HeadlessExtension": {
+      "source": "./src/HeadlessExtension.ts",
+      "types@<5.2": "./dist/typescript-too-old.d.ts",
+      "types": "./dist/HeadlessExtension.d.ts",
+      "development": "./dist/LexicalHeadlessHeadlessExtension.dev.js",
+      "production": "./dist/LexicalHeadlessHeadlessExtension.prod.js",
+      "default": "./dist/LexicalHeadlessHeadlessExtension.js"
+    },
+    "./HeadlessExtension.js": {
+      "source": "./src/HeadlessExtension.ts",
+      "types@<5.2": "./dist/typescript-too-old.d.ts",
+      "types": "./dist/HeadlessExtension.d.ts",
+      "development": "./dist/LexicalHeadlessHeadlessExtension.dev.js",
+      "production": "./dist/LexicalHeadlessHeadlessExtension.prod.js",
+      "default": "./dist/LexicalHeadlessHeadlessExtension.js"
+    },
     "./dom": {
+      "source": "./src/dom.ts",
       "browser": {
-        "types": "./dom.d.ts",
-        "development": "./LexicalHeadlessDom.browser.dev.mjs",
-        "production": "./LexicalHeadlessDom.browser.prod.mjs",
-        "default": "./LexicalHeadlessDom.browser.mjs"
+        "types@<5.2": "./dist/typescript-too-old.d.ts",
+        "types": "./dist/dom.d.ts",
+        "development": "./dist/LexicalHeadlessDom.browser.dev.js",
+        "production": "./dist/LexicalHeadlessDom.browser.prod.js",
+        "default": "./dist/LexicalHeadlessDom.browser.js"
       },
-      "import": {
-        "types": "./dom.d.ts",
-        "development": "./LexicalHeadlessDom.dev.mjs",
-        "production": "./LexicalHeadlessDom.prod.mjs",
-        "node": "./LexicalHeadlessDom.node.mjs",
-        "default": "./LexicalHeadlessDom.mjs"
-      },
-      "require": {
-        "types": "./dom.d.ts",
-        "development": "./LexicalHeadlessDom.dev.js",
-        "production": "./LexicalHeadlessDom.prod.js",
-        "default": "./LexicalHeadlessDom.js"
-      }
+      "types@<5.2": "./dist/typescript-too-old.d.ts",
+      "types": "./dist/dom.d.ts",
+      "development": "./dist/LexicalHeadlessDom.dev.js",
+      "production": "./dist/LexicalHeadlessDom.prod.js",
+      "default": "./dist/LexicalHeadlessDom.js"
     },
     ".": {
-      "import": {
-        "types": "./index.d.ts",
-        "development": "./LexicalHeadless.dev.mjs",
-        "production": "./LexicalHeadless.prod.mjs",
-        "node": "./LexicalHeadless.node.mjs",
-        "default": "./LexicalHeadless.mjs"
-      },
-      "require": {
-        "types": "./index.d.ts",
-        "development": "./LexicalHeadless.dev.js",
-        "production": "./LexicalHeadless.prod.js",
-        "default": "./LexicalHeadless.js"
-      }
+      "source": "./src/index.ts",
+      "types@<5.2": "./dist/typescript-too-old.d.ts",
+      "types": "./dist/index.d.ts",
+      "development": "./dist/LexicalHeadless.dev.js",
+      "production": "./dist/LexicalHeadless.prod.js",
+      "default": "./dist/LexicalHeadless.js"
     }
   },
   "dependencies": {
+    "@lexical/internal": "workspace:*",
     "happy-dom": "^20.9.0",
     "lexical": "workspace:*"
-  }
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/__tests__",
+    "!src/__bench__",
+    "!src/__mocks__",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "!src/**/*.bench.ts",
+    "!src/**/*.bench.tsx",
+    "README.md",
+    "LICENSE"
+  ],
+  "types": "./dist/typescript-too-old.d.ts",
+  "typesVersions": {
+    "*": {
+      "*": [
+        "./dist/typescript-too-old.d.ts"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "typescript": ">=5.2"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "type": "module"
 }

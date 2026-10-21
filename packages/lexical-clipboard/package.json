@@ -9,12 +9,13 @@
     "paste"
   ],
   "license": "MIT",
-  "version": "0.44.0",
-  "main": "LexicalClipboard.js",
-  "types": "index.d.ts",
+  "version": "0.52.0",
+  "main": "./dist/LexicalClipboard.js",
+  "types": "./dist/typescript-too-old.d.ts",
   "dependencies": {
     "@lexical/extension": "workspace:*",
     "@lexical/html": "workspace:*",
+    "@lexical/internal": "workspace:*",
     "@lexical/list": "workspace:*",
     "@lexical/selection": "workspace:*",
     "@lexical/utils": "workspace:*",
@@ -26,23 +27,45 @@
     "url": "git+https://github.com/facebook/lexical.git",
     "directory": "packages/lexical-clipboard"
   },
-  "module": "LexicalClipboard.mjs",
+  "module": "./dist/LexicalClipboard.js",
   "sideEffects": false,
   "exports": {
     ".": {
-      "import": {
-        "types": "./index.d.ts",
-        "development": "./LexicalClipboard.dev.mjs",
-        "production": "./LexicalClipboard.prod.mjs",
-        "node": "./LexicalClipboard.node.mjs",
-        "default": "./LexicalClipboard.mjs"
-      },
-      "require": {
-        "types": "./index.d.ts",
-        "development": "./LexicalClipboard.dev.js",
-        "production": "./LexicalClipboard.prod.js",
-        "default": "./LexicalClipboard.js"
-      }
+      "source": "./src/index.ts",
+      "types@<5.2": "./dist/typescript-too-old.d.ts",
+      "types": "./dist/index.d.ts",
+      "development": "./dist/LexicalClipboard.dev.js",
+      "production": "./dist/LexicalClipboard.prod.js",
+      "default": "./dist/LexicalClipboard.js"
     }
-  }
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/__tests__",
+    "!src/__bench__",
+    "!src/__mocks__",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "!src/**/*.bench.ts",
+    "!src/**/*.bench.tsx",
+    "README.md",
+    "LICENSE"
+  ],
+  "typesVersions": {
+    "*": {
+      "*": [
+        "./dist/typescript-too-old.d.ts"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "typescript": ">=5.2"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "type": "module"
 }

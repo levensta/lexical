@@ -5,23 +5,34 @@
  * LICENSE file in the root directory of this source tree.
  *
  */
-
 import {
   $createParagraphNode,
   $createTextNode,
   $getEditor,
   $getRoot,
-  ParagraphNode,
-  TextNode,
+  $isParagraphNode,
+  $isTextNode,
+  type ParagraphNode,
+  type RootNode,
+  type TextNode,
 } from 'lexical';
-import {describe, expect, test} from 'vitest';
+import {assert, describe, expect, test} from 'vitest';
 
 import {EditorState} from '../../LexicalEditorState';
-import {$createRootNode, RootNode} from '../../nodes/LexicalRootNode';
+import {$createRootNode} from '../../nodes/LexicalRootNode';
 import {initializeUnitTest} from '../utils';
 
 describe('LexicalEditorState tests', () => {
   initializeUnitTest(testEnv => {
+    test('isEmpty', async () => {
+      const root = $createRootNode();
+      expect(new EditorState(new Map([['root', root]])).isEmpty()).toBe(true);
+      // A state with nothing in it at all is emptier still. Reporting it as
+      // non-empty let `setEditorState` commit an editor with no root for
+      // `$getRoot` to find, rather than refusing it.
+      expect(new EditorState(new Map()).isEmpty()).toBe(true);
+    });
+
     test('constructor', async () => {
       const root = $createRootNode();
       const nodeMap = new Map([['root', root]]);
@@ -29,6 +40,34 @@ describe('LexicalEditorState tests', () => {
       const editorState = new EditorState(nodeMap);
       expect(editorState._nodeMap).toBe(nodeMap);
       expect(editorState._selection).toBe(null);
+    });
+
+    test("read('pending' | 'latest' | 'force-commit')", () => {
+      const {editor} = testEnv;
+      const $textContent = () => $getRoot().getTextContent();
+
+      // a regular update is processed synchronously but committed
+      // asynchronously
+      editor.update(() => {
+        $getRoot().append(
+          $createParagraphNode().append($createTextNode('foo')),
+        );
+      });
+      expect(editor.getEditorState().read($textContent)).toBe('');
+      // read('pending') observes the pending state without flushing it
+      expect(editor.read('pending', $textContent)).toBe('foo');
+      // read('latest') reads the committed state without flushing the pending
+      // state, equivalent to editor.getEditorState().read(fn, {editor})
+      expect(editor.read('latest', $textContent)).toBe('');
+      // neither 'pending' nor 'latest' commits the pending state
+      expect(editor.getEditorState().read($textContent)).toBe('');
+      // read() defaults to 'force-commit', which flushes the pending state
+      expect(editor.read($textContent)).toBe('foo');
+      expect(editor.getEditorState().read($textContent)).toBe('foo');
+      // without a pending state, all modes read the committed state
+      expect(editor.read('pending', $textContent)).toBe('foo');
+      expect(editor.read('latest', $textContent)).toBe('foo');
+      expect(editor.read('force-commit', $textContent)).toBe('foo');
     });
 
     test('read()', async () => {
@@ -47,8 +86,12 @@ describe('LexicalEditorState tests', () => {
 
       editor.getEditorState().read(() => {
         root = $getRoot();
-        paragraph = root.getFirstChild()!;
-        text = paragraph.getFirstChild()!;
+        const firstChild = root.getFirstChild();
+        assert($isParagraphNode(firstChild), 'Expected a ParagraphNode');
+        paragraph = firstChild;
+        const firstGrandchild = firstChild.getFirstChild();
+        assert($isTextNode(firstGrandchild), 'Expected a TextNode');
+        text = firstGrandchild;
       });
 
       expect(root).toEqual({
@@ -63,6 +106,8 @@ describe('LexicalEditorState tests', () => {
         __parent: null,
         __prev: null,
         __size: 1,
+        __slotHost: null,
+        __slots: null,
         __style: '',
         __textFormat: 0,
         __textStyle: '',
@@ -79,6 +124,8 @@ describe('LexicalEditorState tests', () => {
         __parent: 'root',
         __prev: null,
         __size: 1,
+        __slotHost: null,
+        __slots: null,
         __style: '',
         __textFormat: 0,
         __textStyle: '',
@@ -115,8 +162,15 @@ describe('LexicalEditorState tests', () => {
         $getRoot().append(paragraph);
       });
 
-      expect(JSON.stringify(editor.getEditorState().toJSON())).toEqual(
-        `{"root":{"children":[{"children":[{"detail":0,"format":0,"mode":"normal","style":"","text":"Hello world","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":""}],"direction":null,"format":"","indent":0,"type":"root","version":1}}`,
+      // Compared as a structure rather than as bytes. Key order is not part of
+      // the serialization format — nothing reads a document positionally, and
+      // `JSON.parse` gives back the same object whichever order it was written
+      // in — so a test that pins the bytes fails for a reordering that changes
+      // nothing about the document.
+      expect(editor.getEditorState().toJSON()).toEqual(
+        JSON.parse(
+          `{"root":{"children":[{"children":[{"detail":0,"format":0,"mode":"normal","style":"","text":"Hello world","type":"text","version":1}],"direction":null,"format":"","indent":0,"textFormat":0,"textStyle":"","type":"paragraph","version":1}],"direction":null,"format":"","indent":0,"type":"root","version":1}}`,
+        ),
       );
     });
 
@@ -151,6 +205,8 @@ describe('LexicalEditorState tests', () => {
               __parent: null,
               __prev: null,
               __size: 0,
+              __slotHost: null,
+              __slots: null,
               __style: '',
               __textFormat: 0,
               __textStyle: '',

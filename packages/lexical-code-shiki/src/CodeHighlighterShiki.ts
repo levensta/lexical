@@ -6,16 +6,16 @@
  *
  */
 
-import type {LexicalEditor, LexicalNode, NodeKey} from 'lexical';
-
 import {
   $isCodeHighlightNode,
   $isCodeNode,
+  $plainifyCodeContent,
   CodeExtension,
   CodeHighlightNode,
   CodeIndentExtension,
   CodeNode,
   DEFAULT_CODE_LANGUAGE,
+  registerCodeGutter,
   registerCodeIndentation,
 } from '@lexical/code-core';
 import {effect, namedSignals} from '@lexical/extension';
@@ -29,7 +29,10 @@ import {
   $isTextNode,
   $onUpdate,
   defineExtension,
+  type LexicalEditor,
+  type LexicalNode,
   mergeRegister,
+  type NodeKey,
   safeCast,
   TextNode,
 } from 'lexical';
@@ -43,7 +46,14 @@ import {
 } from './FacadeShiki';
 
 export interface Tokenizer {
-  defaultLanguage: string;
+  /**
+   * Language to fall back to when a {@link CodeNode} doesn't carry one.
+   * Set to `null` to opt out of the implicit fallback — code blocks
+   * without a language stay untouched (no `data-language` attribute, no
+   * syntax highlighting) so a markdown round-trip can preserve ``` with
+   * no info string.
+   */
+  defaultLanguage: string | null;
   defaultTheme: string;
   $tokenize: (
     this: Tokenizer,
@@ -60,7 +70,10 @@ export const ShikiTokenizer: Tokenizer = {
     codeNode: CodeNode,
     language?: string,
   ): LexicalNode[] {
-    return $getHighlightNodes(codeNode, language || this.defaultLanguage);
+    const lang = language || this.defaultLanguage;
+    return lang === null
+      ? $plainifyCodeContent(codeNode.getTextContent())
+      : $getHighlightNodes(codeNode, lang);
   },
   defaultLanguage: DEFAULT_CODE_LANGUAGE,
   defaultTheme: DEFAULT_CODE_THEME,
@@ -84,30 +97,6 @@ function $textNodeTransform(
   }
 }
 
-function updateCodeGutter(node: CodeNode, editor: LexicalEditor): void {
-  const codeElement = editor.getElementByKey(node.getKey());
-  if (codeElement === null) {
-    return;
-  }
-  const children = node.getChildren();
-  const childrenLength = children.length;
-  // @ts-ignore: internal field
-  if (childrenLength === codeElement.__cachedChildrenLength) {
-    // Avoid updating the attribute if the children length hasn't changed.
-    return;
-  }
-  // @ts-ignore:: internal field
-  codeElement.__cachedChildrenLength = childrenLength;
-  let gutter = '1';
-  let count = 1;
-  for (let i = 0; i < childrenLength; i++) {
-    if ($isLineBreakNode(children[i])) {
-      gutter += '\n' + ++count;
-    }
-  }
-  codeElement.setAttribute('data-gutter', gutter);
-}
-
 interface TransformState {
   didTransform: boolean;
   // Using extra cache (`nodesCurrentlyHighlighting`) since both CodeNode and CodeHighlightNode
@@ -126,9 +115,12 @@ function $codeNodeTransform(
   const nodeKey = node.getKey();
   const {nodesCurrentlyHighlighting} = transformState;
 
-  // When new code block inserted it might not have language selected
+  // When new code block inserted it might not have language selected.
+  // Tokenizers configured with `defaultLanguage: null` opt out of the
+  // implicit fallback — leave the node unset and skip highlighting so
+  // markdown round-trips ``` (no info string) without injecting one.
   let language = node.getLanguage();
-  if (!language) {
+  if (!language && tokenizer.defaultLanguage !== null) {
     language = tokenizer.defaultLanguage;
     node.setLanguage(language);
   }
@@ -143,20 +135,32 @@ function $codeNodeTransform(
   let inFlight = false;
   if (!isCodeThemeLoaded(theme)) {
     loadCodeTheme(theme, editor, nodeKey);
-    inFlight = true;
+    // Only the highlight path (a resolved language) consumes the theme. With
+    // no language the text is plainified, which needs no theme, so don't defer
+    // the split on a theme load that won't be used — otherwise a code block
+    // with `defaultLanguage: null` stays an unsplit TextNode until the theme
+    // happens to finish loading.
+    if (language) {
+      inFlight = true;
+    }
   }
 
   // dynamic import of languages
-  if (isCodeLanguageLoaded(language)) {
-    if (!node.getIsSyntaxHighlightSupported()) {
-      node.setIsSyntaxHighlightSupported(true);
+  if (language) {
+    if (isCodeLanguageLoaded(language)) {
+      if (!node.getIsSyntaxHighlightSupported()) {
+        node.setIsSyntaxHighlightSupported(true);
+      }
+    } else {
+      const loadingTask = loadCodeLanguage(language, editor, nodeKey);
+      // if the language is not supported, the download will not occur
+      if (!loadingTask && node.getIsSyntaxHighlightSupported()) {
+        node.setIsSyntaxHighlightSupported(false);
+      }
+      inFlight = true;
     }
-  } else {
-    if (node.getIsSyntaxHighlightSupported()) {
-      node.setIsSyntaxHighlightSupported(false);
-    }
-    loadCodeLanguage(language, editor, nodeKey);
-    inFlight = true;
+  } else if (node.getIsSyntaxHighlightSupported()) {
+    node.setIsSyntaxHighlightSupported(false);
   }
 
   if (inFlight) {
@@ -184,7 +188,7 @@ function $codeNodeTransform(
     }
 
     const lang = currentNode.getLanguage() || tokenizer.defaultLanguage;
-    const highlightNodes = tokenizer.$tokenize(currentNode, lang);
+    const highlightNodes = tokenizer.$tokenize(currentNode, lang ?? undefined);
     const diffRange = getDiffRange(currentNode.getChildren(), highlightNodes);
     const {from, to, nodesForReplacement} = diffRange;
 
@@ -216,6 +220,17 @@ function $updateAndRetainSelection(
   }
 
   const anchor = selection.anchor;
+  // The selection is restored by walking this code node's children, so it can
+  // only be retained when it actually points inside this code node. When the
+  // selection lives elsewhere there is nothing to retain and restoring would
+  // drag the caret into the code block instead of leaving it where the user
+  // put it.
+  const anchorNode = anchor.getNode();
+  if (anchorNode !== node && !node.isParentOf(anchorNode)) {
+    updateFn();
+    return;
+  }
+
   const anchorOffset = anchor.offset;
   const isNewLineAnchor =
     anchor.type === 'element' &&
@@ -224,7 +239,6 @@ function $updateAndRetainSelection(
 
   // Calculating previous text offset (all text node prior to anchor + anchor own text offset)
   if (!isNewLineAnchor) {
-    const anchorNode = anchor.getNode();
     textOffset =
       anchorOffset +
       anchorNode.getPreviousSiblings().reduce((offset, _node) => {
@@ -245,29 +259,40 @@ function $updateAndRetainSelection(
   }
 
   // If it was non-element anchor then we walk through child nodes
-  // and looking for a position of original text offset
-  node.getChildren().some(_node => {
-    const isText = $isTextNode(_node);
-    if (isText || $isLineBreakNode(_node)) {
-      const textContentSize = _node.getTextContentSize();
-      if (isText && textContentSize >= textOffset) {
-        _node.select(textOffset, textOffset);
-        return true;
+  // and looking for a position of original text offset. A LineBreakNode
+  // consumes one unit of the offset but can't host a text point, so when the
+  // offset lands on one we use an element point on the code node instead of
+  // letting the offset go negative and selecting the next text node at an
+  // out-of-range position.
+  const children = node.getChildren();
+  for (let index = 0; index < children.length; index++) {
+    const child = children[index];
+    if ($isTextNode(child)) {
+      const textContentSize = child.getTextContentSize();
+      if (textContentSize >= textOffset) {
+        child.select(textOffset, textOffset);
+        return;
       }
       textOffset -= textContentSize;
+    } else if ($isLineBreakNode(child)) {
+      if (textOffset === 0) {
+        node.select(index, index);
+        return;
+      }
+      textOffset -= 1;
     }
-    return false;
-  });
+  }
+  node.select(children.length, children.length);
 }
 
 // Finds minimal diff range between two nodes lists. It returns from/to range boundaries of prevNodes
 // that needs to be replaced with `nodes` (subset of nextNodes) to make prevNodes equal to nextNodes.
 function getDiffRange(
-  prevNodes: Array<LexicalNode>,
-  nextNodes: Array<LexicalNode>,
+  prevNodes: LexicalNode[],
+  nextNodes: LexicalNode[],
 ): {
   from: number;
-  nodesForReplacement: Array<LexicalNode>;
+  nodesForReplacement: LexicalNode[];
   to: number;
 } {
   let leadingMatch = 0;
@@ -347,27 +372,7 @@ export function registerHighlightingOnly(
 ): () => void {
   const registrations = [];
 
-  // Only register the mutation listener if not in headless mode
-  if (editor._headless !== true) {
-    registrations.push(
-      editor.registerMutationListener(
-        CodeNode,
-        mutations => {
-          editor.getEditorState().read(() => {
-            for (const [key, type] of mutations) {
-              if (type !== 'destroyed') {
-                const node = $getNodeByKey(key);
-                if (node !== null) {
-                  updateCodeGutter(node as CodeNode, editor);
-                }
-              }
-            }
-          });
-        },
-        {skipInitialization: false},
-      ),
-    );
-  }
+  registrations.push(registerCodeGutter(editor));
 
   const transformState: TransformState = {
     didTransform: false,
@@ -449,33 +454,4 @@ export const CodeShikiExtension = defineExtension({
       return registerHighlightingOnly(editor, stores.tokenizer.value);
     });
   },
-});
-
-/**
- * @deprecated Use {@link CodeShikiExtension} instead. This type is a
- * flat alias for {@link Tokenizer} kept for backward compatibility with
- * {@link CodeHighlighterShikiExtension}.
- */
-export type CodeHighlighterShikiConfig = Tokenizer;
-
-/**
- * @deprecated Use {@link CodeShikiExtension} instead.
- *
- * This is a thin backward-compatibility shim that preserves the original
- * flat {@link Tokenizer} config API. It depends on
- * {@link CodeShikiExtension} and routes its configured tokenizer to the
- * underlying extension during `init` (before `CodeShikiExtension` builds),
- * so consumers using
- * `configExtension(CodeHighlighterShikiExtension, customTokenizer)`
- * continue to work without modification.
- */
-export const CodeHighlighterShikiExtension = defineExtension({
-  config: safeCast<CodeHighlighterShikiConfig>(ShikiTokenizer),
-  dependencies: [CodeShikiExtension],
-  init: (editorConfig, config, state) => {
-    // Forward the flat Tokenizer config to CodeShikiExtension's `tokenizer`
-    // field before it builds.
-    state.getDependency(CodeShikiExtension).config.tokenizer = config;
-  },
-  name: '@lexical/code-shiki/legacy',
 });

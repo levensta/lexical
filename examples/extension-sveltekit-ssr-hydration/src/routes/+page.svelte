@@ -16,7 +16,7 @@
 	).output;
 	const editableSignal = extension.getExtensionDependencyFromEditor(
 		editor,
-		buildEditor.WatchEditableExtension
+		extension.WatchEditableExtension
 	).output;
 	$effect(() => {
 		if (browser && editorRef) {
@@ -25,7 +25,7 @@
 		}
 	});
 	// Only compute this on the client
-	let exportJson = $derived(browser ? JSON.stringify($stateSignal, null, 2) : '');
+	let exportJson = $derived(browser ? JSON.stringify($stateSignal.toJSON(true), null, 2) : '');
 </script>
 
 <svelte:head>

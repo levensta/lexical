@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  *
  */
+
+// @vitest-environment node
 import {
   buildEditorFromExtensions,
   configExtension,
@@ -15,7 +17,7 @@ import {
   $getEditor,
   COMMAND_PRIORITY_EDITOR,
   createCommand,
-  LexicalEditor,
+  type LexicalEditor,
 } from 'lexical';
 import {describe, expect, test, vi} from 'vitest';
 

@@ -28,7 +28,10 @@ import {
   selectFromAlignDropdown,
   selectFromInsertDropdown,
   test,
+  waitForSelector,
 } from '../utils/index.mjs';
+
+test.skip(({isPlainText}) => isPlainText, 'Requires rich text');
 
 test.describe('Toolbar', () => {
   test.beforeEach(({isCollab, page}) =>
@@ -40,18 +43,20 @@ test.describe('Toolbar', () => {
     }),
   );
 
-  test(
-    'Insert image caption + table',
-    {
-      tag: '@flaky',
-    },
-    async ({page, isPlainText}) => {
+  test.describe(() => {
+    test.skip(IS_COLLAB_V2);
+    test('Insert image caption + table', async ({page}) => {
       // TODO(collab-v2): nested editors are not supported yet
-      test.skip(isPlainText || IS_COLLAB_V2);
+
       await focusEditor(page);
 
       // Add caption
       await insertSampleImage(page);
+      // The image is rendered behind React.Suspense (fallback={null}) and only
+      // appears once the sample asset finishes loading; under parallel load
+      // that can exceed assertHTML's 5s retry window, leaving an empty
+      // decorator. Wait for the <img> explicitly before asserting.
+      await waitForSelector(page, '.editor-image img', {timeout: 30000});
       // Catch flakiness earlier
       await assertHTML(
         page,
@@ -65,7 +70,7 @@ test.describe('Toolbar', () => {
                   src="${SAMPLE_IMAGE_URL}" />
               </div>
             </span>
-            <br />
+            <br data-lexical-managed-linebreak="true" />
           </p>
         `,
         undefined,
@@ -104,7 +109,7 @@ test.describe('Toolbar', () => {
                 </div>
               </div>
             </span>
-            <br />
+            <br data-lexical-managed-linebreak="true" />
           </p>
         `,
         undefined,
@@ -113,7 +118,7 @@ test.describe('Toolbar', () => {
           ignoreInlineStyles: true,
         },
         actualHtml =>
-          // flaky fix: remove the extra <p dir="auto"><br /></p> that appears occasionally in CI runs
+          // flaky fix: remove the extra <p dir="auto"><br data-lexical-managed-linebreak="true" /></p> that appears occasionally in CI runs
           actualHtml.replace(
             html`
               <p dir="auto">
@@ -121,7 +126,7 @@ test.describe('Toolbar', () => {
                   Yellow flower in tilt shift lens
                 </span>
               </p>
-              <p dir="auto"><br /></p>
+              <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
             `,
             html`
               <p dir="auto">
@@ -144,7 +149,7 @@ test.describe('Toolbar', () => {
       await assertHTML(
         page,
         html`
-          <p dir="auto"><br /></p>
+          <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
         `,
         undefined,
         {
@@ -161,7 +166,7 @@ test.describe('Toolbar', () => {
         page,
         html`
           <p dir="auto">
-            <br />
+            <br data-lexical-managed-linebreak="true" />
           </p>
           <table dir="auto">
             <colgroup>
@@ -171,93 +176,93 @@ test.describe('Toolbar', () => {
               <col style="width: 92px" />
               <col style="width: 92px" />
             </colgroup>
-            <tr>
-              <th>
-                <p><br /></p>
+            <tr dir="auto">
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <th>
-                <p><br /></p>
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <th>
-                <p><br /></p>
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <th>
-                <p><br /></p>
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <th>
-                <p><br /></p>
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
             </tr>
-            <tr>
-              <th>
-                <p><br /></p>
+            <tr dir="auto">
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
             </tr>
-            <tr>
-              <th>
-                <p><br /></p>
+            <tr dir="auto">
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
             </tr>
-            <tr>
-              <th>
-                <p><br /></p>
+            <tr dir="auto">
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
             </tr>
-            <tr>
-              <th>
-                <p><br /></p>
+            <tr dir="auto">
+              <th dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </th>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
-              <td>
-                <p><br /></p>
+              <td dir="auto">
+                <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
               </td>
             </tr>
           </table>
-          <p dir="auto"><br /></p>
+          <p dir="auto"><br data-lexical-managed-linebreak="true" /></p>
         `,
         undefined,
         {
@@ -265,121 +270,118 @@ test.describe('Toolbar', () => {
           ignoreInlineStyles: true,
         },
       );
-    },
-  );
-
-  test('Center align image', async ({page, isPlainText, isCollab}) => {
-    // Image selection can't be synced in collab
-    test.skip(isPlainText || isCollab);
-    await focusEditor(page);
-
-    await insertSampleImage(page);
-    await click(page, '.editor-image img');
-    await assertHTML(
-      page,
-      html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-          <span
-            class="editor-image"
-            contenteditable="false"
-            data-lexical-decorator="true">
-            <div draggable="true">
-              <img
-                class="focused draggable"
-                alt="Yellow flower in tilt shift lens"
-                draggable="false"
-                src="${SAMPLE_IMAGE_URL}"
-                style="height: inherit; max-width: 500px; width: inherit" />
-            </div>
-            <div>
-              <button class="image-caption-button">Add Caption</button>
-              <div class="image-resizer image-resizer-n"></div>
-              <div class="image-resizer image-resizer-ne"></div>
-              <div class="image-resizer image-resizer-e"></div>
-              <div class="image-resizer image-resizer-se"></div>
-              <div class="image-resizer image-resizer-s"></div>
-              <div class="image-resizer image-resizer-sw"></div>
-              <div class="image-resizer image-resizer-w"></div>
-              <div class="image-resizer image-resizer-nw"></div>
-            </div>
-          </span>
-          <br />
-        </p>
-      `,
-    );
-
-    await focus(page, '.editor-image');
-    await page.pause();
-    await selectFromAlignDropdown(page, '.center-align');
-    await assertHTML(
-      page,
-      html`
-        <p
-          class="PlaygroundEditorTheme__paragraph"
-          dir="auto"
-          style="text-align: center">
-          <span
-            class="editor-image"
-            contenteditable="false"
-            data-lexical-decorator="true">
-            <div draggable="true">
-              <img
-                class="focused draggable"
-                alt="Yellow flower in tilt shift lens"
-                draggable="false"
-                src="${SAMPLE_IMAGE_URL}"
-                style="height: inherit; max-width: 500px; width: inherit" />
-            </div>
-            <div>
-              <button class="image-caption-button">Add Caption</button>
-              <div class="image-resizer image-resizer-n"></div>
-              <div class="image-resizer image-resizer-ne"></div>
-              <div class="image-resizer image-resizer-e"></div>
-              <div class="image-resizer image-resizer-se"></div>
-              <div class="image-resizer image-resizer-s"></div>
-              <div class="image-resizer image-resizer-sw"></div>
-              <div class="image-resizer image-resizer-w"></div>
-              <div class="image-resizer image-resizer-nw"></div>
-            </div>
-          </span>
-          <br />
-        </p>
-      `,
-    );
+    });
   });
 
-  test('When we select three textNodes with different formatting at the same time, the selection formatting should show no formatting at all', async ({
-    page,
-    isPlainText,
-    isCollab,
-  }) => {
-    test.skip(isPlainText || isCollab);
-    await focusEditor(page);
+  test.describe(() => {
+    test.skip(({isCollab}) => isCollab);
+    test('Center align image', async ({page}) => {
+      // Image selection can't be synced in collab
 
-    await toggleBold(page);
-    await page.keyboard.type('A ');
-    await toggleBold(page);
-    await toggleItalic(page);
-    await page.keyboard.type('B ');
-    await toggleItalic(page);
-    await toggleUnderline(page);
-    await page.keyboard.type('C');
-    await selectCharacters(page, 'left', 5);
+      await focusEditor(page);
 
-    const actives = await page.$$('div.toolbar button.toolbar-item.active');
-    expect(actives.length).toEqual(0);
-  });
+      await insertSampleImage(page);
+      await click(page, '.editor-image img');
+      await assertHTML(
+        page,
+        html`
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <span
+              class="editor-image"
+              contenteditable="false"
+              data-lexical-decorator="true">
+              <div draggable="true">
+                <img
+                  class="focused draggable"
+                  alt="Yellow flower in tilt shift lens"
+                  draggable="false"
+                  src="${SAMPLE_IMAGE_URL}"
+                  style="height: inherit; max-width: 500px; width: inherit" />
+              </div>
+              <div>
+                <button class="image-caption-button">Add Caption</button>
+                <div class="image-resizer image-resizer-n"></div>
+                <div class="image-resizer image-resizer-ne"></div>
+                <div class="image-resizer image-resizer-e"></div>
+                <div class="image-resizer image-resizer-se"></div>
+                <div class="image-resizer image-resizer-s"></div>
+                <div class="image-resizer image-resizer-sw"></div>
+                <div class="image-resizer image-resizer-w"></div>
+                <div class="image-resizer image-resizer-nw"></div>
+              </div>
+            </span>
+            <br data-lexical-managed-linebreak="true" />
+          </p>
+        `,
+      );
 
-  test('Selecting empty paragraphs has empty selection format', async ({
-    page,
-    isPlainText,
-    isCollab,
-  }) => {
-    test.skip(isPlainText || isCollab);
-    await focusEditor(page);
-    await page.keyboard.press('Enter');
-    await selectAll(page);
-    const actives = await page.$$('div.toolbar button.toolbar-item.active');
-    expect(actives.length).toEqual(0);
+      await focus(page, '.editor-image');
+      await page.pause();
+      await selectFromAlignDropdown(page, '.center-align');
+      await assertHTML(
+        page,
+        html`
+          <p
+            class="PlaygroundEditorTheme__paragraph"
+            dir="auto"
+            style="text-align: center">
+            <span
+              class="editor-image"
+              contenteditable="false"
+              data-lexical-decorator="true">
+              <div draggable="true">
+                <img
+                  class="focused draggable"
+                  alt="Yellow flower in tilt shift lens"
+                  draggable="false"
+                  src="${SAMPLE_IMAGE_URL}"
+                  style="height: inherit; max-width: 500px; width: inherit" />
+              </div>
+              <div>
+                <button class="image-caption-button">Add Caption</button>
+                <div class="image-resizer image-resizer-n"></div>
+                <div class="image-resizer image-resizer-ne"></div>
+                <div class="image-resizer image-resizer-e"></div>
+                <div class="image-resizer image-resizer-se"></div>
+                <div class="image-resizer image-resizer-s"></div>
+                <div class="image-resizer image-resizer-sw"></div>
+                <div class="image-resizer image-resizer-w"></div>
+                <div class="image-resizer image-resizer-nw"></div>
+              </div>
+            </span>
+            <br data-lexical-managed-linebreak="true" />
+          </p>
+        `,
+      );
+    });
+
+    test('When we select three textNodes with different formatting at the same time, the selection formatting should show no formatting at all', async ({
+      page,
+    }) => {
+      await focusEditor(page);
+
+      await toggleBold(page);
+      await page.keyboard.type('A ');
+      await toggleBold(page);
+      await toggleItalic(page);
+      await page.keyboard.type('B ');
+      await toggleItalic(page);
+      await toggleUnderline(page);
+      await page.keyboard.type('C');
+      await selectCharacters(page, 'left', 5);
+
+      const actives = await page.$$('div.toolbar button.toolbar-item.active');
+      expect(actives.length).toEqual(0);
+    });
+
+    test('Selecting empty paragraphs has empty selection format', async ({
+      page,
+    }) => {
+      await focusEditor(page);
+      await page.keyboard.press('Enter');
+      await selectAll(page);
+      const actives = await page.$$('div.toolbar button.toolbar-item.active');
+      expect(actives.length).toEqual(0);
+    });
   });
 });

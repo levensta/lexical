@@ -6,9 +6,9 @@
  *
  */
 
+import invariant from '@lexical/internal/invariant';
 import {createRectsFromDOMRange} from '@lexical/selection';
-import {isHTMLElement, type LexicalEditor} from 'lexical';
-import invariant from 'shared/invariant';
+import {getRootOwnerDocument, isHTMLElement, type LexicalEditor} from 'lexical';
 
 import px from './px';
 
@@ -21,6 +21,28 @@ const mutationObserverConfig = {
 
 function prependDOMNode(parent: HTMLElement, node: HTMLElement) {
   parent.insertBefore(node, parent.firstChild);
+}
+
+function dedupeHighlightRects(rects: DOMRect[]): DOMRect[] {
+  const kept: DOMRect[] = [];
+  for (const rect of rects) {
+    if (rect.width < 0.5 || rect.height < 0.5) {
+      continue;
+    }
+    if (
+      kept.some(
+        prev =>
+          Math.abs(prev.left - rect.left) <= 1 &&
+          Math.abs(prev.top - rect.top) <= 1 &&
+          Math.abs(prev.right - rect.right) <= 1 &&
+          Math.abs(prev.bottom - rect.bottom) <= 1,
+      )
+    ) {
+      continue;
+    }
+    kept.push(rect);
+  }
+  return kept;
 }
 
 /**
@@ -38,13 +60,15 @@ function prependDOMNode(parent: HTMLElement, node: HTMLElement) {
 export default function mlcPositionNodeOnRange(
   editor: LexicalEditor,
   range: Range,
-  onReposition: (node: Array<HTMLElement>) => void,
+  onReposition: (node: HTMLElement[]) => void,
 ): () => void {
   let rootDOMNode: null | HTMLElement = null;
   let parentDOMNode: null | HTMLElement = null;
   let observer: null | MutationObserver = null;
-  let lastNodes: Array<HTMLElement> = [];
-  const wrapperNode = document.createElement('div');
+  let lastNodes: HTMLElement[] = [];
+  const wrapperNode = getRootOwnerDocument(
+    editor.getRootElement(),
+  ).createElement('div');
   wrapperNode.style.position = 'relative';
 
   function position(): void {
@@ -52,8 +76,13 @@ export default function mlcPositionNodeOnRange(
     invariant(parentDOMNode !== null, 'Unexpected null parentDOMNode');
     const {left: parentLeft, top: parentTop} =
       parentDOMNode.getBoundingClientRect();
-    const rects = createRectsFromDOMRange(editor, range);
-    if (!wrapperNode.isConnected) {
+    // This path already filters full-width block rects. Keep overlapping rects
+    // with distinct coverage; the generic keep-smaller dedupe can erase text.
+    const rects = dedupeHighlightRects(createRectsFromDOMRange(editor, range));
+    // Not `isConnected`: once the parent is detached from the document that is
+    // false forever, and re-inserting the wrapper is a mutation the observer
+    // reacts to, so every mutation would re-insert it without end.
+    if (wrapperNode.parentNode !== parentDOMNode) {
       prependDOMNode(parentDOMNode, wrapperNode);
     }
     let hasRepositioned = false;
@@ -61,7 +90,8 @@ export default function mlcPositionNodeOnRange(
       const rect = rects[i];
       // Try to reuse the previously created Node when possible, no need to
       // remove/create on the most common case reposition case
-      const rectNode = lastNodes[i] || document.createElement('div');
+      const rectNode =
+        lastNodes[i] || getRootOwnerDocument(rootDOMNode).createElement('div');
       const rectNodeStyle = rectNode.style;
       if (rectNodeStyle.position !== 'absolute') {
         rectNodeStyle.position = 'absolute';
@@ -94,7 +124,11 @@ export default function mlcPositionNodeOnRange(
       lastNodes[i] = rectNode;
     }
     while (lastNodes.length > rects.length) {
-      lastNodes.pop();
+      const node = lastNodes.pop();
+      if (node != null) {
+        node.remove();
+        hasRepositioned = true;
+      }
     }
     if (hasRepositioned) {
       onReposition(lastNodes);
@@ -148,7 +182,19 @@ export default function mlcPositionNodeOnRange(
     position();
   }
 
-  const removeRootListener = editor.registerRootListener(restart);
+  // Returning stop() hands the teardown to the root listener registry.
+  // registerRootListener runs the previous invocation's cleanup before it
+  // re-invokes the listener, and runs it again when the listener is
+  // unregistered, so the wrapper element and the MutationObserver never
+  // outlive the invocation of restart() that created them. Without a cleanup
+  // to call, an invocation that lands after this positionNodeOnRange has
+  // already been disposed of (root listeners are triggered from a snapshot of
+  // the registry, so a listener removed mid-pass is still called) would leave
+  // its wrapper element in the document with nothing left to remove it.
+  const removeRootListener = editor.registerRootListener(() => {
+    restart();
+    return stop;
+  });
 
   return () => {
     removeRootListener();

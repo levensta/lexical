@@ -1,3 +1,550 @@
+## v0.52.0 (2026-09-27)
+
+- lexical Bug Fix Track explicit Shift state for iOS line breaks (#9242) Bob Ippolito
+- lexicallexical-headlesslexical-website Documentation Update Rewrite the introduction and modernize the Concepts, Serialization docs and examples (#9249) Bob Ippolito
+- lexical-extension Chore Update signals-core to 1.14.4 (#9248) Bob Ippolito
+- lexical-playground Chore Harden nested editor selection ownership test (#9243) Bob Ippolito
+- lexical Bug Fix Limit handled selection input suppression to macOS Chrome (#9251) Bob Ippolito
+- lexical Bug Fix resolve line deletion endpoints inside inline decorators (#9247) Maxim Gagiev
+- lexical-website Documentation Update Document ErrorBoundary configuration for PlainTextExtension (#9182) dvd233
+- lexical Bug Fix Handle select-all deletion with root slots (#9240) Bob Ippolito
+- lexical Breaking change Remove LexicalNode.getCommonAncestor (#9238) mayrang
+- lexical-clipboard Bug Fix Keep dragged text when it is dropped on the edge of its own selection (#9241) Alexandre Kohler
+- lexical-selectionlexical-utils Bug Fix Preserve selection coverage across mixed typography (#9196) Minwook Shin
+- lexical Bug Fix Preserve first block after backward range deletion (#9236) Abdul Azhar Jamesh
+- lexicallexical-code-corelexical-playground Bug Fix reveal the caret in code blocks and other containers that scroll sideways (#9215) om singhal
+- benchmarks Chore Migrate benchmarks to vitest 5 and add type checking in CI (#9235) Bob Ippolito
+- lexicallexical-tablelexical-playgroundlexical-website Breaking Change Standardize selection notification timing (#9219) Bob Ippolito
+- lexical-compiler Bug Fix Normalize temporary paths in watcher tests (#9195) Minwook Shin
+- lexical-website Documentation Update document the full update-listener payload and the cascade guard (#9227) Sherry
+- lexicallexical-html Breaking Change honor createDOM overrides in default DOM export (#9231) Bob Ippolito
+- lexical Bug Fix Avoid read-only warnings for commit-time focus commands (#9230) Bob Ippolito
+- lexical-website Bug Fix resolve external API links and shorten submodule labels (#9220) Bob Ippolito
+- lexical-website Documentation Update point the selection guide at NodeCaret (#9229) Sherry
+- lexical-website Documentation Update setEditorState warns and recovers in production, it does not always throw (#9228) Sherry
+- lexical-website Documentation Update correct five stale facts in the maintainers guide (#9226) Sherry
+- lexical-website Documentation Update fix the collaboration snippets and two stale playground references (#9225) Sherry
+- lexical-website Documentation Update correct DOMExportOutput, DOMConversion priority, and the HeadingNode examples (#9223) Sherry
+- lexical-website Documentation Update fix seven incorrect API references in the DOM import guide (#9222) Sherry
+- lexical-website Documentation Update fix two extension names that do not exist (#9210) Sherry
+- lexical-website Documentation Update add HMRExtension and KeyboardShortcutsExtension to the included list (#9213) Sherry
+- lexical-website Documentation Update call the system Lexical Extensions, not Lexical Builder (#9212) Sherry
+- lexical-website Documentation Update fix the broken snippets in the extensions migration guide (#9211) Sherry
+- lexical-website Documentation Update re-sync the TabIndentationExtension snippet with its source (#9209) Sherry
+- lexical-website Documentation Update correct four claims in the extension lifecycle guide (#9208) Sherry
+- lexical-website Documentation Update fix the test path in the traversals maintenance comment (#9207) Sherry
+- lexical-website Documentation Update correct the shadow-DOM support table and two API references (#9206) Sherry
+- lexical-website Documentation Update show initialEditorState, not a function passed to createEditor (#9205) Sherry
+- lexical-website Documentation Update fix two nodes.mdx snippets that do not compile (#9200) Sherry
+- lexical-mdast Feature Unify MdastExtension and inherit export rules (#9198) Bob Ippolito
+- lexical-code-corelexical-code-prismlexical-code-shiki Refactor move the duplicated updateCodeGutter into lexicalcode-core (#9164) om singhal
+- lexical-website Documentation Update fix syntax errors, outdated APIs, and broken links in Node Transforms guide (#9197) Jaideep krishna A
+- lexical-website Bug Fix Include packages in API docs GitHub source links (#9204) Bob Ippolito
+- lexical-website Documentation Update node-replacement config uses nodes, not nodes (#9203) Sherry
+- lexical-website Documentation Update clone is synthesized for config nodes, and fix a setSomeData typo (#9202) Sherry
+- lexical-website Documentation Update useReactDecorators, and the three missing TextNode formats (#9201) Sherry
+- lexical-website Documentation Update the deserialization hook is importJSON, not importFromJSON (#9199) Sherry
+- lexical-playground Bug Fix Fix Find  Replace offsets across decorators and slots (#9186) Monier Ayman
+- lexical Bug Fix recover from an empty editor state instead of throwing (#9183) Sherry
+- lexical-website Documentation Update fix insertList argument in the commands guide (#9188) Sherry
+- lexical-website Documentation Update seed the editor state with setEditorState, not registerRichText (#9189) Sherry
+- lexical-website Documentation Update title the history page after its public API, not useHistory (#9190) Sherry
+- lexical-website Documentation Update use the real plugin component names in the editor-state React example (#9191) Sherry
+- lexical-website Documentation Update getElementByKey returns a DOM element, not a node (#9192) Sherry
+- lexical Refactor Cache writable nodes during pending updates (#9169) Bob Ippolito
+- v0.51.0 (#9178) Bob Ippolito
+- v0.51.0 Lexical GitHub Actions Bot
+
+## v0.51.0 (2026-09-17)
+
+- build(deps-dev) bump the vitest group across 1 directory with 2 updates (#9157) dependabotbot
+- build(deps) bump immutable from 4.3.8 to 4.3.9 (#9175) dependabotbot
+- build(deps) bump babelparser from 8.0.0 to 8.0.4 (#9160) dependabotbot
+- lexical Feature node JSON serialization schemas, with compact export (#8602) Bob Ippolito
+- build(deps) bump date-fns from 4.1.0 to 4.4.0 (#9159) dependabotbot
+- build(deps-dev) bump eslint from 10.9.1 to 10.10.0 in the dev-dependencies group across 1 directory (#9158) dependabotbot
+- lexical-react Chore Deprecate LexicalComposer in favor of LexicalExtensionComposer (#9168) Sherry
+- lexical Bug Fix TextNode setMode, setTextContent and isSimpleText read the latest state (#9162) Leo Camus
+- lexical Bug Fix Avoid redundant selection change command (#9163) Sergey Gorbachev
+- lexical-extension Refactor publish lexicalextension as subpath exports with compilerlint enforcement (#9161) Bob Ippolito
+- build(deps-dev) bump flow-bin from 0.330.0 to 0.331.0 in the flow-and-hermes group (#9156) dependabotbot
+- build(deps-dev) bump the dev-dependencies group across 1 directory with 26 updates (#9150) dependabotbot
+-  Bug Fix Keep modern Flow variance keywords in the www Flow stubs (#9154) Sherry
+- lexical-list Bug Fix indenting between two nested lists no longer converts the second lists type (#9118) om singhal
+- build(deps) bump the rollup group across 1 directory with 5 updates (#9144) dependabotbot
+- build(deps) bump the shikijs group with 6 updates (#9145) dependabotbot
+- build(deps-dev) bump baseline-browser-mapping from 2.10.33 to 2.11.0 (#9139) dependabotbot
+- build(deps-dev) bump the flow-and-hermes group with 4 updates (#9143) dependabotbot
+- build(deps) bump the docusaurus-and-typedoc group with 13 updates (#9142) dependabotbot
+- build(deps-dev) bump vitest from 4.1.8 to 4.1.11 (#9140) dependabotbot
+- lexical-code Breaking change drop the deprecated prism re-exports and the lexicalcode-prism dependency (#9141) Bob Ippolito
+-  Breaking change Publish ESM only to npm and keep the CommonJS build for www (#9127) Bob Ippolito
+- lexical-text Bug Fix a text entity keeps the style and detail of the text it replaces (#9130) om singhal
+- lexical-extension Fix use Array.from over iterable spread so extension editors build under loose-mode transpilation (#9134) Sherry
+- lexical-playground Bug Fix avoid node selection on CardNode drag release (#9135) KAVYANSH KUMAR
+- lexical Bug Fix removeTextFromCaretRange no longer leaves a childless list or table as the roots only child (#9116) om singhal
+- lexical-utils Bug Fix notify when selection overlay rectangles are removed (#9117) Mehul Jariwala
+- lexical-table Bug Fix mergeCells no longer keeps the empty paragraph of the target cell (#9122) om singhal
+- build(deps-dev) bump esbuild from 0.27.7 to 0.28.1 (#9123) dependabotbot
+- lexical Fix make the extension Flow types usable (defineExtension was uncallable) (#9132) Sherry
+- lexical-markdown Bug Fix text left outside a markdown link keeps its format (#9131) om singhal
+- lexical-website Documentation Update document that Lexical is a singleton per app and libraries must declare it as a peer dependency (#9125) Sherry
+- lexical-playground Bug Fix clear CardReview CSS placeholders reliably on paste in Safari (#9129) sahir
+-  Bug Fix Remove the remaining module-scope side effects that defeat tree-shaking (#9124) Bob Ippolito
+- lexicallexical-compiler Bug Fix Let esbuild drop the editor from a createCommand-only production import (#9121) Gerard Rovira
+- v0.50.0 (#9110) Bob Ippolito
+- v0.50.0 Lexical GitHub Actions Bot
+
+## v0.50.0 (2026-09-02)
+
+- lexical-extensionlexical-react Feature HMR support for extensions (#8959) mayrang
+- lexical Bug Fix Preserve pasted blocks after consecutive line breaks (#8890) Wan Xiankai
+- lexical Bug Fix collapse to a paragraph on select-all delete of a non-paragraph first block (#8884) Gunjan Jaswal
+- lexicallexical-html Bug Fix emit a terminating br so a trailing line break survives HTML export (#8765) Sherry
+- lexical-playgroundlexical-react Bug Fix only one collab client bootstraps a nested editors document (#9107) Bob Ippolito
+- lexical Performance Skip the sibling walk when no selection point reads the index (#9108) om singhal
+- Upgrade to pnpm 11 (#8816) Gerard Rovira
+- lexical-yjslexical-react Feature Allow custom Yjs XmlText (#6483) Flvio Carvalho
+- lexical-table Bug Fix Fix unreliable text cursor placement when tapping table cells on touch devices (#8827) arman
+- Add React MathType example (#8692) culpen90
+- lexical-markdownlexical-mdast Bug Fix markdown round trip keeps fenced code and enclosing blocks intact (#9055) Shaurya Singh
+- lexical-reactlexical-playground Bug Fix plugins and hooks re-derive when their inputs change (#9051) Shaurya Singh
+- lexicallexical-table Bug Fix selection and caret state at block and shadow-root boundaries (#9058) Shaurya Singh
+- lexical-tablelexical-playgroundlexical-rich-text Bug Fix table grid indices, cell state and boundary selection (#9054) Shaurya Singh
+- lexical-link Bug Fix open middle-clicked links in a new tab (#9078) Nithin
+- lexical-yjslexical-react Bug Fix collab sync gaps between the editor state and the yjs doc (#9057) Shaurya Singh
+- lexicallexical-htmllexical-clipboard Bug Fix HTML importexport and slot frames carry the whole state (#9052) Shaurya Singh
+- lexical-utils Bug Fix Prioritize file transfer over texthtml when pasting browser-copied images (#8699) Vivek Jariwala
+- lexical-listlexical-playground Bug Fix keep the focus on the editor when a press lands in a check list items label (#9088) Luan Taraschi
+- lexical-rich-text Bug Fix forward dropped files when the drop point has no caret (#9076) Nithin
+- lexical-list Bug Fix list operations and DOM importexport keep the nodes own state (#9050) Shaurya Singh
+- lexicallexical-rich-textlexical-utils Bug Fix copy and insert keep the original nodes state (#9059) Shaurya Singh
+- lexical-playground Bug Fix custom nodes keep the theme classes createDOM applied (#9049) Shaurya Singh
+- lexical Bug Fix insertText no longer throws when the caret is inside a segmented TextNode (#9104) om singhal
+- lexical-historylexical-utilslexical-playground Bug Fix overlays, hit targets and shared state at the editor boundary (#9053) Shaurya Singh
+- lexical-react Bug Fix Only open the auto embed menu when a bare link is pasted (#9091) om singhal
+- lexical-list Bug Fix stop throttling rapid mouse clicks on the same checklist checkbox (#9102) No Schmidt
+- lexical Bug Fix insertNodes no longer leaves an empty paragraph after a block inserted at the end of a paragraph (#9099) om singhal
+- lexical Bug Fix Backspace at a soft line-wrap boundary in Firefox (#9101) Bob Ippolito
+- tests Chore silence unnecessary stderr warnings in test-unit (#9098) Bob Ippolito
+- lexical-markdown Bug Fix import a link whose URL contains parentheses (#9093) Luan Taraschi
+- lexical-playground Bug Fix validateUrl no longer accepts a sentence that merely contains a URL (#9097) om singhal
+- lexical-compilerlexical-eslint-plugin-internal Feature inject  PURE  annotations at build time (#9086) Bob Ippolito
+- lexical-code-corelexical-code-prismlexical-code-shiki Bug Fix code blocks keep the caret and their own attributes (#9056) Shaurya Singh
+- lexical-htmllexical-rich-textlexical-website Docs clarify DOMImportExtension rule evaluation order (#9089) Bob Ippolito
+- lexical Feature build the node with create when importing JSON (#9090) Bob Ippolito
+- docs clarify vanilla quick start path (#8801) Alex Espinoza
+- ci Chore cache Playwrights apt packages and skip WebKit deps on Linux (#9085) Bob Ippolito
+- lexical-link Feature Tell screen reader users when typing turns text into a link (#9071) Brett Humphrey
+- ci Extract the internal-registry OIDC exchange into a reusable auth action (#9084) Gerard Rovira
+- lexical-list Bug Fix remove the stale depth theme class when a list changes depth (#9077) Nithin
+- lexical-link Bug Fix read the latest state in LinkNode and AutoLinkNode getters (#9080) Nithin
+- lexical-list Feature opt-in Word list paste overlay (#9082) MD Rifat Hossain
+- lexical-html Bug Fix reject an empty selector group in parseSelector (#9083) Luan Taraschi
+- lexical-utils Bug Fix objectKlassEquals throws on undefined and prototype-less objects (#9079) Nithin
+- lexical-table Bug Fix disconnect trackTable MutationObserver in removeListeners (#9074) kaminski-dev
+- lexical-markdown Bug Fix dont prefix a newline when a selection starts below the first block (#8960) Luan Taraschi
+- lexical-website Documentation Update Add Decorators concept guide (#8696) Ching Wei Kang
+- lexical Chore Fix qs package dependency vulnerability (#9072) vijay ojha
+- lexical-rich-text Bug Fix extend adjacent node selections with ShiftArrow (#9067) Luan Taraschi
+- build(deps) bump mermaid from 11.15.0 to 11.16.1 (#8980) dependabotbot
+- lexical Bug Fix restore managed line break in wrapped slot hosts (#9066) Luan Taraschi
+- lexicallexical-extensionlexical-playground Refactor Compiled keyboard shortcut dispatch (#8876) mayrang
+- lexical-reactlexical-playground Bug Fix restore focus after dragging decorator blocks (#9064) Luan Taraschi
+- lexical-rich-textlexical-a11y Feature Announce heading changes by default in rich text (#8908) Brett Humphrey
+- lexical-textlexical-marklexical-linklexical-playground Bug Fix inline node transforms keep the node and its DOM in step (#9060) Shaurya Singh
+- lexical Bug fix apply nodes replacement for importJSON (#9061) Maksim Horbachevsky
+- lexical-table Bug Fix toggleHeaderStyle stays inside TableCellHeaderStates (#9038) Shaurya Singh
+- lexical-history Bug Fix SharedHistoryExtension forwards the parent maxDepth (#9044) Shaurya Singh
+- lexical-table Bug Fix align every cell a table selection covers, not just the naive rect (#9043) Shaurya Singh
+- lexical-playground Bug Fix importing an unparseable data-lexical-datetime no longer breaks serialization (#9047) Shaurya Singh
+- lexical-html Bug Fix apply the after() replacement when exportDOM returns a DocumentFragment (#8997) Shaurya Singh
+- lexical-playground Bug Fix a closed collapsible container no longer exports as open (#8994) Shaurya Singh
+- Breaking Changelexical-clipboard Bug Fix the Lexical clipboard payload asks excludeFromCopy for the clone destination (#8995) Shaurya Singh
+- lexical-link Bug Fix AutoLinkNode.insertNewAfter keeps the nodes own properties (#8996) Shaurya Singh
+- lexical-playground Bug Fix createMentionNode keeps the display text it is given (#8999) Shaurya Singh
+- lexical Bug Fix only root and editable listeners may return a cleanup function (#8990) Shaurya Singh
+- lexical Bug Fix EditorState.clone() keeps the parsed flag (#8989) Shaurya Singh
+- lexical-link Bug Fix TOGGLELINKCOMMAND object payload no longer discards the configured attributes (#8985) Shaurya Singh
+- lexical-playground Bug Fix keep the Excalidraw drawing and its size across a node clone (#8984) Shaurya Singh
+- lexical-link Bug Fix toggleLink applies the title attribute for a NodeSelection (#8993) Shaurya Singh
+- lexical Bug Fix Dont move the caret past the acceptance boundary for Enter on iOS (#8941) 
+- lexical-code-prism Bug Fix read the language maps as own properties (#8981) Luan Taraschi
+- lexical-markdown Bug Fix dont emit a dangling closing tag when a selection slices a format to whitespace (#8961) Luan Taraschi
+- lexical Bug Fix keep the select-all highlight visible next to boundary decorators (#8931) Bob Ippolito
+- lexicallexical-website Documentation Update SKIPDOMSELECTIONTAG is ignored during initial editor state (#8636) spokodev
+- lexical-utils Documentation Update describe reverseDfs instead of reverseDfsIterator (#8962) Luan Taraschi
+- lexical-selection Bug Fix dont throw reading the parent style of a slot value (#8950) Shaurya Singh
+- lexical-yjs Bug Fix Dont sync root textFormattextStyle (#8940) Patrick Moody
+- lexical-react Bug Fix Update the typeahead query during IME composition (#8942) 
+- scripts Bug Fix wait out minimumReleaseAge boundary in example installs (#8934) Bob Ippolito
+- lexical-playground Chore Stabilize the collab dangling-text e2e tests (#8933) Bob Ippolito
+- Breaking Changelexicallexical-utilslexical-selectionlexical-website Bug Fix LexicalNode.replace no longer re-homes named slots (#8938) Bob Ippolito
+- lexical-website Add opengraph social preview image (#8935) alex-js-ltd
+- lexical Deprecate CANUNDOCOMMAND and CANREDOCOMMAND in favour of HistoryExtensions signals (#8918) Shaurya Singh
+- lexical Bug Fix make extendCaretToRanges focus a real, flippable position (#8930) Sa-Te
+- lexical-list Bug Fix continue split-list numbering from the items value, not its index (#8913) Shaurya Singh
+- lexical-rich-text Bug Fix preserve heading format and style when splitting a heading (#8926) Shaurya Singh
+- lexical Bug Fix dont create a sibling cycle when splice re-inserts the node after the range (#8916) Shaurya Singh
+- lexical Bug Fix keep parent size correct when replace() is passed a sibling (#8917) Shaurya Singh
+- lexical-react Bug Fix Recreate decorator portals when the editor root remounts (#8921) alphanull
+- lexical-table Bug Fix Import the dir attribute in table importDOM (#8914) Shaurya Singh
+- lexical-table Bug Fix step by the visited cells colSpan when walking left to insert a column (#8911) Shaurya Singh
+- lexical-selection Bug Fix apply a function-valued style patch only once to an empty element (#8912) Shaurya Singh
+- lexical-rich-text Bug Fix Dont deselect a selected node when clicking inside it (#8910) lvaro Tejero-Cantero
+- lexical Bug Fix Detect iPadOS desktop-class user agents (#8909) 
+- lexical-rich-text Feat add pasteFileContentCheck config to let files win over incidental HTML on paste (#8902) Sa-Te
+- lexical-extension Bug Fix Normalize multiple clicks (#8928) Sergey Gorbachev
+- lexicallexical-selectionlexical-list Bug Fix Skip named-slot values in block converters, diagnose replace() on a slot value, and delete slot-bearing decorator hosts at the selection boundary (#8905) Bob Ippolito
+- lexical-react Bug Fix Use the SSR-safe useLayoutEffect in Placeholder (#8906) Patrick Stillhart
+- lexical-selection Bug Fix Handle bare slot values in setBlocksType (#8901) mayrang
+- lexical-playground Bug Fix Reset the cached selection format on clear formatting (#8889) Youngjae Kim
+- lexical Bug Fix Line breaks in a slot cant be inserted or deleted correctly (#8899) sahir
+- lexicallexical-rich-text Bug Fix Show block cursor before block decorators regardless of preceding sibling (#8888) Olivier Chevallier
+- lexical Documentation Update Add JSDoc comments to core package exports (#8895) mayrang
+- lexical-playground Chore Use ownerDocument and getDocument() for shadow DOM safety (#8878) mayrang
+- v0.49.0 (#8893) Bob Ippolito
+- v0.49.0 Lexical GitHub Actions Bot
+
+## v0.49.0 (2026-07-29)
+
+- lexical-markdown Bug Fix Preserve headings when typing list shortcuts (#8879) Steven Dang
+- lexical-rich-text Bug Fix Forward editorConfig to QuoteNode.updateDOM (#8882) Sha Halimi
+- lexical-table Bug Fix Table alignment fails when selecting in non-TL-BR direction (#8883) sahir
+- Breaking Changelexical Chore Remove redundant registerCommandregisterNodeTransform generics (#8877) mayrang
+- lexical-html Bug Fix Dispatch unrestricted CSS selector groups (#8873) Madan kumar
+- lexical-playground Bug Fix Deterministic history coalescing for flaky webkit undo tests (#8874) Bob Ippolito
+- lexical Performance Skip redundant selection restoration in removeTextFromCaretRange (#8872) mayrang
+- lexical Refactor Simplify RangeSelection.insertText via removeText decomposition (#8870) mayrang
+- lexical-list Chore Remove redundant decorator-adjacent backspace handler (#8871) mayrang
+- lexical-table Feature Skip colgroup element in table DOM with undefined col widths (#8850) Zachary Gallafent
+- lexical Bug Fix Create selection when clicking between block decorators on Firefox (#8862) mayrang
+- fix config() synthesized getType() recurses infinitely when inherited as own static (#8867 follow-up) (#8869) Sherry
+- lexicallexical-website Bug Fix Homepage crash from optimized dev build (#8861) Bob Ippolito
+- lexical Bug Fix run editor updates dispatched from a read-only context in a fresh writable update (#8863) Sherry
+- lexical Feature Editor operation benchmarks (#8856) mayrang
+- lexical Chore Migrate LexicalSelection tests to buildEditorFromExtensions (#8865) mayrang
+- fix config() synthesized getType() inherited by subclasses causes node-type collision (#8640) (#8867) Sherry
+- fix config() auto-synthesized clone() loses properties when called directly (#8640) (#8864) Sherry
+- lexical-tablelexical Feature Sticky scrollbar for overflowing tables (#8790) mayrang
+- lexical-code-shiki Bug Fix Deduplicate async loads and merge into history (#8854) Alexis
+- lexical-table Chore Remove dead code in table command handlers (#8857) mayrang
+- lexical-tablelexical-playground Chore Deprecate getShape() and migrate playground (#8853) mayrang
+- lexical-list Chore Rename isNestedListNode to isNestedListNode (#8843) Bob Ippolito
+- lexical-playground Bug Fix account for sticky toolbar in scroll padding (#8849) Bob Ippolito
+- Breaking Changeslexical Refactor Port node classes to the config() protocol (#8640) Bob Ippolito
+- lexical-table Chore Deprecate createTableSelection in favor of createTableSelectionFrom (#8855) mayrang
+- lexical-table Bug Fix Enable DELETELINECOMMAND in table cells (#8851) mayrang
+- lexical Bug Fix Scope bench vitest projects to exclude regular test files (#8852) mayrang
+- v0.48.0 (#8847) Bob Ippolito
+- v0.48.0 Lexical GitHub Actions Bot
+
+## v0.48.0 (2026-07-16)
+
+- lexical-reactlexical-table Bug Fix Enable table copy in read-only mode (#8845) mayrang
+- lexical-extensionlexical-mdastdev-mdast-editor-example Feature Add MdastHtmlExtension and Markdown custom-construct examples (collapsible, kbd, alerts, footnotes) (#8826) Bob Ippolito
+- Fix fail closed in LinkNode.sanitizeUrl() on unparseable URLs (XSS) (#8846) xiezhenjia-meta
+- lexical Chore Fix serialize-javascript package dependency vulnerability (#8803) vijay ojha
+- lexical-react Bug Fix Count block separators in character limit overflow wrapping (#8840) mayrang
+- lexical-yjslexical-react Feature Customizable Yjs shared-type root name (#8841) mayrang
+- lexical-list Bug Fix Backspace at start of list item outdents or converts to paragraph (#8829) mayrang
+- lexical-table Feature Add moveTableRow function  Add missing export for unmergeCellNode (#8833) 
+- lexical-link Bug Fix disable link opening for disabled autolink in (#8839) Olivier Chevallier
+- lexical-rich-textlexical-plain-text Bug Fix dont cancel dragover for text drags so native drops work again (#8842) Bob Ippolito
+- Open playground links in a new tab (#8837) Sherry
+- lexical-react Bug Fix Merge adjacent OverflowNodes in useCharacterLimit (#8831) mayrang
+- lexical-code-shiki Bug Fix force re-tokenize after async language load (#8830) Olivier Chevallier
+- lexical-tablelexical-playground Bug Fix Auto-scroll while drag-selecting cells past the visible edge (#8822) Oleksandr Trukhnii
+- lexical-mdastlexical-markdown Bug Fix Roundtrip overlapping inline formats (#8825) Bob Ippolito
+- v0.47.0 (#8821) Bob Ippolito
+- v0.47.0 Lexical GitHub Actions Bot
+
+## v0.47.0 (2026-07-10)
+
+- lexicallexical-rich-text Bug Fix Fix formatText toggle direction and add SETTEXTFORMATCOMMAND (#8807) mayrang
+- scripts Bug Fix Let npm prompt for OTP when publishing bootstrap stubs (#8820) Bob Ippolito
+- lexical-playground Bug Fix Clear inline font-size when converting to heading (#8800) mayrang
+- lexical-tablelexical-playground Feature setTableRowIsHeader and setTableColumnIsHeader utilities (#8815) mayrang
+- lexical-website Documentation Update Rewrite testing guide (#8811) mayrang
+- lexical-mdastlexical-rich-text Feature lexicalmdast, a micromarkmdast-based alternative to lexicalmarkdown (#8794) Bob Ippolito
+- Make dependency-check resilient to transient registry errors (#8818) Gerard Rovira
+- lexical Refactor Move event module globals into per-editor InputState (#8809) mayrang
+- lexical Bug Fix getDocument() should fall back to the global document when there is no active editor (#8813) Sherry
+-  lexical-playground Bug Fix Keep cell background color modal open on first click (#8806) sahir
+- lexical-playground Bug Fix Use consistent default maxWidth for markdown-imported images (#8810) mayrang
+- lexical-devtoolslexical-playground Chore Update flow, hermes, and babel packages to latest (#8795) Bob Ippolito
+- Add a 7-day pnpm minimumReleaseAge to match the Dependabot cooldown (#8808) Gerard Rovira
+- lexical Chore Fix tmp package dependency vulnerability (#8802) vijay ojha
+- lexical Chore Add missing Flow type declarations (#8799) mayrang
+- lexical-markdown Feature Add generateNodesFromMarkdownString (#8789) mayrang
+- lexicallexical-playground Chore Refactor IME composition test infrastructure and add browser-level coverage (#8793) mayrang
+- lexical-playground Bug Fix Use viewBox dimensions for unsized Excalidraw output (#8798) mayrang
+- lexical-table Bug Fix Export insertTableRowAtNode and insertTableColumnAtNode (#8791) 
+- lexical-playgroundlexical-website Feature Add Vercel Analytics and Speed Insights (#8796) Gerard Rovira
+- lexicallexical-eslint-plugin Feature Add getDocument() API and Shadow DOM lint enforcement (#8788) mayrang
+- scripts Bug Fix strip misplaced pure annotations from prod builds (#8786) Bob Ippolito
+- lexical Bug Fix deleteCharacter overwrites X11 PRIMARY selection via Selection.modify (#8774) Bob Ippolito
+- lexical-playground Bug Fix Support Unicode URLs in autolink matcher (#8787) mayrang
+- lexical-table Feature Spread pasted TSV text across table cells (#8780) mayrang
+- Breaking Changelexical Bug Fix Preserve DOM element when composing on segmented TextNode middle (#8784) mayrang
+- Breaking Changelexical-reactlexical-devtools-core Chore Drop React 17 support, baseline is now React 18 (#8782) Bob Ippolito
+- lexical-playgroundlexical Feature Ruby annotation node with floating editor (#8741) mayrang
+- lexical-playground Feature Find and Replace (#8779) mayrang
+- lexical-playground Bug Fix restore RTL checkbox position in checklist (#8783) Aldo Ryanda
+- lexical-rich-text Bug Fix Stop ArrowUpDown from skipping block decorators (#8775) mayrang
+- lexical-playground Bug Fix Convert remaining icon glyphs to mask-image for forced-colors support (#8781) mayrang
+- fix(lexical) use extends for type parameter bound in registerEventListeners flow type (#8778) Sherry
+- lexical Bug Fix Keep selection inside single-child inline elements (#8772) mayrang
+- lexical Feature registerEventListener  registerEventListeners DOM helpers (#8767) Bob Ippolito
+- lexical-playground Bug Fix Restore floating toolbar comment icon after mask-image conversion (#8773) mayrang
+- lexical Bug Fix Skip ZWSP insertion for format mismatch on Android Chrome (#8769) mayrang
+- lexical-a11ylexical-reactlexical-playgroundlexical-website Feature lexicala11y framework-agnostic accessibility helpers  WCAG AA reference adoption (#8591) mayrang
+- Add missing copyright headers to 4 source files (#8768) xiezhenjia-meta
+- lexical-website Bug Fix Remove horizontal scroll on homepage hero (#8760) Bakhtiyar
+- lexical-selection Bug Fix re-resolve detached firstBlock in insert (#8764) Olivier Chevallier
+- lexical Modernize InlineFormattableNode Flow stub syntax rejected by fb-www flow strict (#8763) Sherry
+- lexical-utils Bug Fix positionNodeOnRange leaking orphan rect nodes when rects shrink (#8762) Durvesh Pilankar
+- docs fix duplicated words in comments and docs (#8761) Durvesh Pilankar
+- lexical-selection Bug Fix Properly handle block end focus in backward selections during setBlocksType (#8753) Olivier Chevallier
+- lexicallexical-extension Bug Fix Align DecoratorTextNode format with TextNode in mixed selections (#8737) sahir
+- lexical Bug Fix Clean up trailing shadow root after select-all delete (#8751) mayrang
+- lexicallexical-rich-text Bug Fix Place block cursor between decorators and shadow roots (#8758) mayrang
+- lexical-playground Bug Fix Deduplicate speech-to-text insertion on Android Chrome (#8759) mayrang
+- lexical Bug Fix Prevent deleteLine from removing adjacent block decorators (#8744) mayrang
+- build(deps) bump actionscheckout from 6 to 7 in the github-actions group (#8757) dependabotbot
+- ci Add internal-registry dependency availability check (#8756) Gerard Rovira
+- lexical Bug Fix Prevent text duplication on iOS Safari when formatting during composition (#8755) mayrang
+- lexical-codelexical-playground Bug Fix Prevent formatting on TabNode inside code blocks (#8752) mayrang
+- lexical Bug Fix Defer onUpdate callbacks during nested commits (#8672) Rohith Matam
+- lexical-extensionlexical-playground Chore Some cleanups (#8732) Sergey Gorbachev
+- lexical-markdown Bug Fix keep fence-like lines inside a code block as content (#8734) German Jablonski
+- v0.46.0 (#8748) Bob Ippolito
+- v0.46.0 Lexical GitHub Actions Bot
+
+## v0.46.0 (2026-06-25)
+
+- lexical Bug Fix Ignore beforeinput and input events in captured decorators (#8740) Bob Ippolito
+- lexical Modernize Flow type-stub syntax rejected by fb-www flow strict (#8742) Sherry
+- lexical Bug Fix Refactor class inheritance loops to use an inheritsLoose-safe helper (#8739) Bob Ippolito
+- lexical Refactor Improve error messages for invalid node classes and cache getStaticNodeConfig (#8735) Bob Ippolito
+- lexical-utilslexical-react Chore Move getScrollParent to lexicalutils (#8733) mayrang
+- lexical Feature Support DOM shadow roots via platform selection APIs (#8694) mayrang
+- lexical Bug Fix Normalize non-inline nodes when inserting into inline-only parents (#8715) Bob Ippolito
+- lexical-utils Add dedupeSelectionRects fix duplicateextra selection rects on WebKit (#7106, #7492) (#8709) Provi
+- lexical-markdown Bug Fix Preserve inline formatting when wrapping already-formatted text with matching markers (#8728) Koki Sato
+- fix(lexical) guard klass.prototype null check in getStaticNodeConfig (#8726) Sherry
+- lexical-plain-textlexical-rich-text Bug Fix Refresh iOS keyboard suggestion bar after Backspace for all locales (#8725) Sergey Gorbachev
+- lexical-markdown Bug Fix Inline code spans containing backticks (#8723) Baptiste Jamin
+- lexicallexical-rich-textlexical-clipboard Bug Fix Named-slot typing  Backspace  Copy  hydrate paths (#8716) mayrang
+- lexical-mark Chore Widen MarkNode method return types to boolean (#8717) Patrick Moody
+- lexical-playground Bug Fix Render PageBreakNode as hr so Safari fires beforeinput after paste (#8719) mayrang
+-  Refactor Migrate editor.getEditorState().read(...) to editor.read(latest, ...) (#8703) Bob Ippolito
+- lexical-reactlexical-playground Refactor Replace react-error-boundary with a self-contained LexicalErrorBoundary (#8720) Bob Ippolito
+- lexical-reactlexical-linklexical-historylexical-extension Docs API doc coverage of react exports (#8714) Bob Ippolito
+- lexical Bug Fix Insert nodes at the block cursor inside a shadow root (#8708) Bob Ippolito
+- lexical-link Bug Fix Preserve LinkNode wrap on copy in FirefoxSafari (#8705) mayrang
+- Breaking Changeslexical-linklexical-listlexical-react Chore Remove a subset of v0.32.1-deprecated exports (#8704) Bob Ippolito
+- lexical-clipboard Bug Fix Correct type-checking (#8706) Sergey Gorbachev
+- Breaking Changeslexicallexical-yjslexical-clipboardlexical-htmllexical-playground Feature Named slots (#8603) mayrang
+- lexical-playground Bug Fix Preserve block equation markdown (#8562) Vivek JM
+- lexical Bug Fix Recheck text node contents on deletion with composition (#8701) EWS
+- lexical Feature Replace LexicalEditor.readPending with editor.read(mode, fn) overload (#8702) Bob Ippolito
+- lexical-playground Bug Fix CodeBlock layout-exit e2e expected HTML (#8695) mayrang
+- Breaking Changelexical Fix Preserve the first linebreak when passing inline nodes to insertNodes and add data-lexical-managed-linebreak attribute to managed linebreaks (#8615) Sergey Gorbachev
+- lexical Chore Remove unused tmp dependency (#8693) Noritaka Kobayashi
+- lexical Bug Fix Reuse the empty trailing block when typing at root  last-offset selection (#8686) mayrang
+- lexical-markdown Bug Fix code spans should bind tighter than text-match transformers (#8688) Bob Ippolito
+- lexical-utilslexical-playground Bug Fix Double paragraph creation when exiting a nested code block (#8684) Sergey Gorbachev
+- lexical-rich-textlexical-plain-text Spec hardening call event.preventDefault() in dragover for HTML5 DnD compliance (#8663) sahir
+- lexical-react Refactor Use hook syntax in .js.flow files to better declare intent (#8682) Sam Zhou
+- lexical-playground Bug Fix clear block alignment and indent with a collapsed selection but not a partial one (#8666) Achal Jhawar
+- lexical-list Bug Fix Preserve previous DecoratorNode on Backspace at the start of a top-level list (#8676) mayrang
+- lexical-markdown Bug Fix Update ordered list start when typing a marker before it (#8678) mayrang
+- lexical Bug Fix Emit COMPOSITIONENDTAG from the Firefox onInput defer branch (#8680) mayrang
+-  Chore always use T syntax instead of ArrayT in TypeScript and Flow (#8675) Bob Ippolito
+- lexical-table Bug Fix dont throw on stale table node keys in handleTableSelectionChangeCommand (#8674) Bob Ippolito
+- ci Bug Fix Fix intermittent EACCES in Windows CI browser tests by pinning Vitest browser port (#8673) Bob Ippolito
+- lexicallexical-utilslexical-extensionlexical-playground Feature SelectBlockExtension (#8532) Sergey Gorbachev
+- lexical-dragon Bug Fix Handle makeChanges messages and the listener registration race (#8665) Bruno Prieto
+- lexical Bug Fix stop infinite-update-loop detector over-firing on bounded activity (fast typing) (#8635) Sherry
+- lexical Chore stop using deprecated traversal type parameters in tests (#8667) Bob Ippolito
+- Breaking Changes Refactor Register DOMImportExtension rules implicitly via node extensions and make tree-shaking annotations effective (#8662) Bob Ippolito
+- Breaking Changelexical Chore deprecate unsafe type parameters on node traversal methods (#8661) Bob Ippolito
+- lexical-yjs Bug Fix Yjs desynchronizes after clearing all nodes (#8646) sahir
+- lexicallexical-yjs Bug Fix avoid empty-paragraph echo and splice crash on collab undo (#6614) and dont preserve tags on non-dirty update (#8651) 0x1vn
+- lexicallexical-react Bug Fix actually route the update-recursion guard through editor.onWarn end-to-end (follow-up to #8644) (#8658) Sherry
+- lexical-yjs Bug Fix keep collab cursor at element end when decoding an out-of-range position (#8652) 0x1vn
+- lexical-playground Bug Fix Fix the importmap of the esm proof of concept (#8655) Bob Ippolito
+- lexical Feature add an onWarn editor hook and route the update-recursion guard through it (#8644) Sherry
+- lexicallexical-historylexical-rich-textlexical-plain-text Feature Snapshot history before cutpaste operations (#8649) Bob Ippolito
+- examples Chore Replace node-state-style with the dev-examples version (#8647) Bob Ippolito
+- lexical-yjslexical-react Feature Render collab cursors via CSS custom Highlight API (#8550) Hamza Khuswan
+- lexical-code-corelexical-playground Feature Create paragraph around the code node when navigating with the arrow keys (#8393) Sergey Gorbachev
+- lexical Extend the config() protocol with accessor-based nominal typing (#8645) Bob Ippolito
+-  Chore require all changes to be backwards compatible (#8634) Sherry
+- lexical-playground Chore Remove localhost1235 validation server code from ActionsPlugin (#8639) Bob Ippolito
+- lexical Chore cover both devInvariant branches in update-recursion guard test (#8638) Sherry
+- lexical-playground Chore De-flake collab Undo with collaboration on e2e test (#8637) Bob Ippolito
+-  Bug Fix Surface a clear error when TypeScript (5.2) cant read the package exports (#8628) Bob Ippolito
+- lexical Bug Fix use devInvariant for update recursion guard to avoid reporting a recovered condition as an uncaught error (#8631) Sherry
+- fix bump astro to 6.1.10 to resolve CVE-2026-45028 (#8566) freddymeta
+- build(deps) bump vitest to 4.1.8 in examples (CVE-2026-47429) (#8633) xiezhenjia-meta
+- build(deps) bump webpack-dev-server to 5.2.4 (CVE-2026-6402) (#8632) xiezhenjia-meta
+- build(deps-dev) bump the dev-dependencies group across 1 directory with 29 updates (#8630) dependabotbot
+- build(deps) bump huggingfacetransformers from 4.0.1 to 4.2.0 (#8629) dependabotbot
+- build(deps) bump lucide-react from 0.503.0 to 1.17.0 (#8625) dependabotbot
+- build(deps) bump shikijslangs from 3.23.0 to 4.2.0 (#8626) dependabotbot
+- build(deps) bump yjs from 13.6.30 to 13.6.31 (#8624) dependabotbot
+- build(deps) bump shikijsengine-javascript from 4.0.2 to 4.2.0 (#8622) dependabotbot
+- build(deps-dev) bump the flow-and-hermes group with 5 updates (#8619) dependabotbot
+- build(deps) bump rolluprollup-linux-x64-gnu from 4.52.0 to 4.61.0 (#8621) dependabotbot
+- build(deps) bump the docusaurus-and-typedoc group with 2 updates (#8618) dependabotbot
+- lexical Refactor assumeEditor now uses devInvariant instead of invariant to warn instead of throwing in prod (#8617) Bob Ippolito
+- lexical-yjs Bug Fix Local range selection grows when collaborator  (#8611) sahir
+- revert(lexical) remove root-element carveout from #8613 (keep the typing test) (#8616) Sherry
+- fix(lexical) reconcile DOM mutations targeting the root element (#8613) Sherry
+- lexical-extensionlexical-reactlexical-playground Chore Add Vitest browser-mode tests via the Playwright runner (#8614) Bob Ippolito
+- Include editor namespace in infinite-update-loop detector error (#8612) Sherry
+- lexical-rich-text Bug Fix Caret stuck when block has no leading or trailing text (#8604) mayrang
+- lexical-code-prismlexical-playground Feature Add Go to code language options (#8600) meaqua9420
+- lexical-code-shiki Bug Fix Set the unsupported syntax flag only once (#8606) Sergey Gorbachev
+- lexical-playground Chore De-flake e2e timing- and history-dependent tests (#8595) Bob Ippolito
+- lexical-playgroundlexical-website Feature Non-printing marks (#8592) (#8594) mayrang
+- lexical-playground Bug Fix AutocompleteExtension wordlist returns the highest-priority completion (#8599) Bob Ippolito
+- ci Bug Fix Trusted-publishing follow-ups (TTY-aware setup script, unify nightly, drop NPMTOKEN) (#8597) Bob Ippolito
+- lexical-playground Feature Korean IME autocomplete with composition-idle ghost (#8574) mayrang
+- lexical Bug Fix TabNode.setTextContent for Safari IME composition (#8598) mayrang
+- lexicallexical-extensionlexical-markdownlexical-playgroundlexical-yjs Bug Fix Linear-time regexes, prototype-pollution guards, and faster CSS parsing (#8593) Bob Ippolito
+- ci Refactor Consolidate release workflows  npm trusted publishing (#8587) Bob Ippolito
+- Breaking Changelexical Feature Generalize captured selection via setDOMUnmanaged(captureSelection)  root lexicalKey stash (#8588) mayrang
+- lexical-playgroundlexical-htmllexical-extension Refactor Migrate playground HTML importexport to the DOMImportExtension pipeline (#8590) Bob Ippolito
+- lexical-link Bug Fix Skip link wrapping on paste for non-simple text nodes (#8513) abhishekvishwakarma007
+- fix(lexical-html) generateHtmlFromNodes should self-establish active-editor scope (back-compat for #8519) (#8589) Sherry
+- lexicallexical-code-corelexical-code-prismlexical-code-shiki Chore Consolidate text tokenization through tokenizeRawText  generateNodesFromRawText (#8579) Bob Ippolito
+- lexical-playground Chore Audit and de-flake the e2e suite (remove all flaky tags) (#8585) Bob Ippolito
+- build(deps-dev) bump tmp from 0.2.5 to 0.2.6 (#8573) dependabotbot
+- v0.45.0 (#8580) Bob Ippolito
+- v0.45.0 Lexical GitHub Actions Bot
+
+## v0.45.0 (2026-05-29)
+
+- cilexical Bug Fix Upgrade playwrighttest to 1.60.0 (#8582) Bob Ippolito
+- lexical-htmllexical-playground Feature Conditional DOM render overrides (disabledForEditordisabledForSession) (#8575) Bob Ippolito
+- fix prevent MOVETOENDMOVETOSTART crash on decorator-only elements (#8577) Sherry
+-  Refactor Publish packages from their root directory (#8554) Bob Ippolito
+- lexical-website Documentation Tuning HistoryExtension for long sessions (#8546) Bob Ippolito
+- lexical-html Feature DOMImportExtension - replacement for importDOM (#8528) Bob Ippolito
+- lexical-website Feature Server-rendered Copy page Markdown button (#8570) Bob Ippolito
+- ci Use playwright install-deps instead of apt-get (#8572) Bob Ippolito
+- lexical-website Bug Fix Fix crash on docserror page from undefined process (#8557) Bob Ippolito
+- lexical Bug Fix Correct children fast-path text size for cross-parent-moved elements (#8569) Bob Ippolito
+- Breaking Changelexicallexical-htmllexical-selectionlexical-utilslexical-playground Feature Generalize DOMSlot and add DOMRenderExtension override surface (#8519) mayrang
+- lexical-playground Bug Fix Build dev playground in development mode (#8565) Bob Ippolito
+- lexical Bug Fix Skip reconcileChildren fast path during full reconcile (#8564) Bob Ippolito
+- lexicallexical-rich-textlexical-code-core Bug Fix Cursor stuck before leading inline DecoratorNode (#8558) mayrang
+- lexical-code-prismlexical-code-shikilexical-playground Feature Allow null Tokenizer.defaultLanguage to preserve markdown  round-trip (#8553) mayrang
+- lexical-extensionlexical-playground Feature Insert paragraph on click after the last block (#8549) mayrang
+- lexical-playground Bug Fix Normalize collapsible content children (#8539) Rohan Patnaik
+- lexical Bug Fix Cache last-child kind for trailing-br reconcile (#8548) mayrang
+- lexical-markdown Chore Cover bold italic markdown round trip (#8541) Rohan Patnaik
+- lexical-extensionlexical-htmllexical-utilslexical Chore Migrate away from legacy flow syntax (#8547) Sam Zhou
+- lexical Feature Detect infinite recursion in update listeners (#8542) mayrang
+- lexical-playground Bug Fix EquationNode click  NodeSelection  empty-input Backspace removes (#8534) mayrang
+- build(deps) bump serialize-javascript from 6.0.2 to 7.0.4 (#8540) dependabotbot
+- lexical-history Feature Add maxDepth option to HistoryExtension (#8537) Bob Ippolito
+- lexical Feature ElementNode importexport support for data-lexical-indent (#8536) Bob Ippolito
+- lexical-markdown Bug Fix Fix Markdown import with Unicode whitespace (#8535) Rodrigo Lungui
+- lexical-website Bug Fix Remove embed1 from non-iframe StackBlitz links (#8531) Bob Ippolito
+- lexical Bug Fix handle triple-click overselection in setBlocksType (#8517) Mike Dalessio
+- Breaking Changelexicallexical-extensionlexical-rich-textlexical-plain-text Feature Move triple click selection handling to NormalizeTripleClickSelectionExtension (#8520) Bob Ippolito
+- lexical-rich-text Bug Fix Insert paragraph on Enter for a block DecoratorNode NodeSelection (#8526) mayrang
+- lexical-yjs Chore Fix RenderSnapshot comment typo (#8527) Shaurya Singh
+- lexical-playground Bug Fix Fix unawaited playwright promises in e2e test suite (#8521) Bob Ippolito
+- ci Chore pin Windows e2e runners to windows-2022 (#8522) Bob Ippolito
+- lexicallexical-yjslexical-playground Chore Respect browserslist (#8512) Sergey Gorbachev
+- lexical-react Feature optional async onClose for LexicalTypeaheadMenuPlugin (#8489) Abhinav Gautam
+- lexical-markdown Bug Fix run element markdown shortcuts on Enter (#8488) Abhinav Gautam
+- lexical-website Bug Fix Correct links to included extensions (#8523) duyda
+- lexical-code-shikinextjs-code-shiki Bug Fix Externalize shiki dependencies in the published bundle (#8514) Bob Ippolito
+- lexical-website Bug Fix Drop Vercel Analytics inject and unwrap chat input from flex parent (#8509) mayrang
+- lexical-website Refactor Drop docusaurus-plugin-internaldocs-fb preset (#8516) Gerard Rovira
+- ci Refactor Use composite actions to simplify github workflows (#8504) Bob Ippolito
+- lexical-extension Bug Fix Set the correct default canIndent (#8510) Sergey Gorbachev
+- lexicallexical-listlexical-selectionlexical-link Refactor Centralize replace-area selection mapping  bulk splice (#8505) mayrang
+- lexical-table Bug Fix prevent crash when moving selection with arrow key outside of nested table (#8502) Randal
+- Breaking Changelexical-extensionlexical-rich-textlexical-plain-text Feature Remove empty inline elements (#8497) Sergey Gorbachev
+- Breaking Changelexical-markdown Bug Fix Apply markdown shortcuts on composition-committed triggers (#8503) mayrang
+- lexical-playground Chore Drop FIXME #8348 Firefox ArrowDown workaround in Tables.spec.mjs (#8508) Mark Feng
+- lexical Perf Children fast path with suffix-incremental cache update in reconcileChildren (#8482) mayrang
+- Breaking Changelexical Bug Fix Adjust selection when removeFromParent callers move a node out of its parent (#8501) mayrang
+- lexical-playground Bug Fix Set font-size for h2 (#8496) Sergey Gorbachev
+- ci Bug Fix Run extended tests on new commits to approved PRs (#8499) Bob Ippolito
+- build(deps) bump mermaid from 11.14.0 to 11.15.0 (#8500) dependabotbot
+- lexical-website Chore pnpm run update-team-data (#8498) Bob Ippolito
+- lexical Bug Fix Handle iOS 10-key Korean IME deleteContentBackward with targetRange (#8475) kotom320
+- Breaking Changelexical Bug Fix Backspace at block start preserves the current block (#8493) mayrang
+- ci Bug Fix Only cancel in-progress workflows on newer commits (#8494) Bob Ippolito
+- exampleslexical-website Feature Add markdown-editor split-view example (#8464) Bob Ippolito
+- lexical-table Bug Fix Attach window pointerdown handler when root element is set after register (#8492) Bob Ippolito
+- lexical-react Chore Make onOpenEmbedModalForConfig prop optional in LexicalAutoEmbedPlugin (#8485) Sergey Gorbachev
+- lexical-code-core Bug Fix detect nested br elements in pasted code (#8487) Danyal Ahmed
+- lexical Bug Fix keep caret above the on-screen keyboard after Enter (#8486) jWA
+- lexical-playground Fix Prevent auto-zoom when focusing in the editor in iOS Safari (#8480) Sergey Gorbachev
+- Breaking Changelexical Bug Fix Include shadow root in getReconciledDirection (#8479) Ibrahim El-bastawisi
+- Fix Copyright statement to match OSS automated checkup regex (#8483) Sherry
+- lexical Bug Fix Preserve queued updates and tags through setRootElement (#8470) mayrang
+- lexical Perf Adopt GenMap copy-on-write for NodeMap and reconciler keyToDOMMap (#8481) mayrang
+- lexical-react Bug Fix ExtensionComponent support for output Components with required props (#8472) Bob Ippolito
+- lexical-history Feature Add canUndo and canRedo ReadonlySignals to HistoryExtension output (#8465) Bob Ippolito
+- lexical Documentation Add TSDoc for LexicalNodeReplacement and withKlass (#8471) Mark Feng
+- examples Chore Disable skipLibCheck in react-rich for lib-types regression coverage (#7093) (#8473) Mark Feng
+- lexical Refactor Cache RangeSelection.isBackward() result on the instance (#8474) mayrang
+- lexical-website Documentation Add missing lexicalreact plugin docs (#8476) abhishekvishwakarma007
+- lexical-website Documentation Update Document NodeState in config JSON serialization (#8467) Mark Feng
+- lexical Bug Fix Resolve --lexical-indent-base-value via CSS var() instead of pre-computing in JS (#8466) mayrang
+- lexical-website Fix copyright statement to pass OSS automated checkup (#8463) Sherry
+- build(deps) bump chakra-uireact from 2.10.9 to 3.35.0 (#8457) dependabotbot
+- lexicallexical-list Feature Add setFormatFromDOM function and use it to import alignment for ListItem (#8460) Sergey Gorbachev
+- examples Docs Add the missing links to the sandbox (#8462) Sergey Gorbachev
+- lexical-yjs Bug Fix Handle node state being removed on non-TextNodes in collab v2 (#8461) James Fitzsimmons
+- build(deps) bump react-error-boundary from 6.0.0 to 6.1.1 (#8456) dependabotbot
+- build(deps) bump react-day-picker from 9.12.0 to 9.14.0 (#8458) dependabotbot
+- build(deps-dev) bump typesjsdom from 21.1.6 to 28.0.1 in the dev-dependencies group (#8455) dependabotbot
+- build(deps) bump yjs from 13.6.27 to 13.6.30 (#8449) dependabotbot
+- build(deps-dev) bump the dev-dependencies group across 1 directory with 30 updates (#8447) dependabotbot
+- lexical-playground Bug Fix Convert selection to a code block in place (#8453) mayrang
+- lexical-code-corelexical-code-shikilexical-code-prism Feature Outdent space-indented code lines (#8445) mayrang
+- build(deps) bump happy-dom from 20.8.9 to 20.9.0 (#8451) dependabotbot
+- build(deps) bump floating-uireact from 0.27.16 to 0.27.19 (#8448) dependabotbot
+- lexical-rich-text Feature Add EscapeFormatAtBoundaryExtension for opt-in format escape at text node boundaries (#8383) Vishisht Maroria
+- lexical-list Feature Add the createListItemNode method to the ListNode and use it for children normalization (#8427) Sergey Gorbachev
+- lexical-playground Bug Fix Allow PagesExtension to be disabled by ActionsPlugin (html  markdown mode) (#8444) Bob Ippolito
+- lexical-playground Bug Fix Prevent crash importing details with loose body content (#8442) Mark Feng
+- lexicallexical-list Bug Fix Reuse DOM when reconciling cross-parent node moves (#8441) mayrang
+- lexical-markdown Bug Fix Preserve hard line breaks in default markdown import (#8402) Provi
+- lexicallexical-playground Bug Fix Add workarounds for buggy browser behavior around macOS text replacements (#8417) Noah Gregory
+- lexical-clipboard Chore Export GetClipboardDataExtension (#8431) Ibrahim El-bastawisi
+- lexical-playground Bug Fix Prevent FloatingLinkEditor toolbar from being clipped near the editors bottom edge (#8432) mayrang
+- lexical Bug Fix Respect CSS display style in isBlockDomNode and isInlineDomNode (#8428) abhishekvishwakarma007
+- lexical-websitelexical-react Documentation Update Clarify editorState null vs undefined and empty-state pitfall (#8429) Mark Feng
+- Chore Inline toolbar SVG icons in examples via Vite asset handling (#8430) Mark Feng
+- lexical-playground Bug Fix Position FloatingLinkEditor below the entire link for multi-line and decorator-only links (#8419) mayrang
+- lexical perf defer DOM Selection property reads in updateDOMSelection (#8422) Royi Hagigi
+- lexical-markdown Feature Add convertSelectionToMarkdownString API (#8395) mayrang
+- lexical-utils Bug Fix Pass editor context to editorState.read() in markSelection (#8411) Sherry
+- lexicallexical-rich-textlexical-list Bug Fix Import dir attribute in importDOM (#8412) mayrang
+- lexical Chore Fix path-to-regexp dependency vulnerability (#8415) Vishisht Maroria
+- lexical Chore Fix immutable dependency vulnerability  (#8409) Vishisht Maroria
+- lexical Chore Fix eslint dependency vulnerability  (#8408) Vishisht Maroria
+- examples Chore Merge dev-node-state-style into examplesnode-state-style (#8403) Bob Ippolito
+- lexical Chore Fix astro dependency vulnerability  (#8406) Vishisht Maroria
+- lexical Chore Fix postcss dependency vulnerability  (#8405) Vishisht Maroria
+- lexical Chore Fix dompurify dependency vulnerability  (#8404) Vishisht Maroria
+- lexical Chore Fix protobufjs dependency vulnerability  (#8401) Vishisht Maroria
+-  Bug Fix Fix release workflows missing rename from release.js to release.mjs (#8400) Bob Ippolito
+- v0.44.0 (#8394) Bob Ippolito
+- v0.44.0 Lexical GitHub Actions Bot
+
 ## v0.44.0 (2026-04-27)
 
 - lexical Chore Fix uuid dependency vulnerability  (#8399) Vishisht Maroria

@@ -18,6 +18,16 @@ import type {
  * Rich Text
  */
 
+export type ImportMimeTypeFunction = (
+  data: string,
+  selection: BaseSelection,
+  $next: (
+    nextData?: string | void,
+    nextSelection?: BaseSelection | void,
+  ) => boolean,
+  dataTransfer: DataTransfer,
+) => boolean;
+
 declare export function $insertDataTransferForRichText(
   dataTransfer: DataTransfer,
   selection: BaseSelection,
@@ -35,7 +45,7 @@ declare export function $getLexicalContent(
 
 declare export function $insertGeneratedNodes(
   editor: LexicalEditor,
-  nodes: Array<LexicalNode>,
+  nodes: LexicalNode[],
   selection: BaseSelection,
 ): void;
 /*
@@ -67,10 +77,19 @@ declare export function $writeDragSourceToDataTransfer(
   selection: RangeSelection,
 ): void;
 
-interface BaseSerializedNode {
-  children?: Array<BaseSerializedNode>;
+// Structurally `SerializedPartialNode` minus its indexer, mirroring the
+// TypeScript declaration in src/clipboard.ts. Aliasing it to the indexed type
+// broke every consumer whose serialized type is a declared interface, since
+// TypeScript gives an interface no implicit index signature. Exported, because
+// it is what `$generateJSONFromSelectedNodes` returns and what
+// `$generateNodesFromSerializedNodes` takes, so a caller holding either has a
+// name for it.
+export interface BaseSerializedNode {
+  children?: BaseSerializedNode[];
+  $slots?: {[string]: BaseSerializedNode};
   type: string;
-  version: number;
+  // Deprecated: ignored when parsing, and omitted by a compact export.
+  version?: number;
 }
 
 declare export function $generateJSONFromSelectedNodes<
@@ -80,14 +99,19 @@ declare export function $generateJSONFromSelectedNodes<
   selection: BaseSelection | null,
 ): {
   namespace: string,
-  nodes: Array<SerializedNode>,
+  nodes: SerializedNode[],
 };
 
 declare export function $generateNodesFromSerializedNodes(
-  serializedNodes: Array<BaseSerializedNode>,
-): Array<LexicalNode>;
+  serializedNodes: BaseSerializedNode[],
+): LexicalNode[];
 
 declare export function copyToClipboard(
   editor: LexicalEditor,
   event: null | ClipboardEvent,
 ): Promise<boolean>;
+declare export function caretFromPoint(
+  x: number,
+  y: number,
+  rootElement?: ?HTMLElement,
+): null | {offset: number, node: Node};

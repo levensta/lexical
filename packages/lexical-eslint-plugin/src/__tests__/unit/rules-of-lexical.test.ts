@@ -6,6 +6,10 @@
  *
  */
 
+// @vitest-environment node
+
+import type {RulesOfLexicalOptions} from '../../rules/rules-of-lexical.js';
+
 import prettier from '@prettier/sync';
 import {RuleTester} from 'eslint';
 import * as fs from 'node:fs';
@@ -13,7 +17,6 @@ import * as path from 'node:path';
 import {describe, expect, it} from 'vitest';
 
 import plugin from '../../LexicalEslintPlugin.js';
-import {type RulesOfLexicalOptions} from '../../rules/rules-of-lexical.js';
 
 // The given string which may be prefixed or underscored later
 const NAME = (name: string) => name;

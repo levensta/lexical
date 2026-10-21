@@ -19,7 +19,7 @@ import type {CodeNode} from '@lexical/code';
  */
 
 export type Tokenizer = {
-  defaultLanguage: string;
+  defaultLanguage: string | null;
   defaultTheme: string;
   $tokenize: (codeNode: CodeNode, language?: string) => LexicalNode[];
 }
@@ -29,8 +29,3 @@ export type CodeShikiConfig = {
 };
 declare export var ShikiTokenizer: Tokenizer;
 declare export var CodeShikiExtension: LexicalExtension<CodeShikiConfig, "@lexical/code-shiki", NamedSignalsOutput<CodeShikiConfig>, void>;
-
-/** @deprecated Use CodeShikiExtension instead */
-export type CodeHighlighterShikiConfig = Tokenizer;
-/** @deprecated Use CodeShikiExtension instead */
-declare export var CodeHighlighterShikiExtension: LexicalExtension<CodeHighlighterShikiConfig, "@lexical/code-shiki/legacy", void, void>;

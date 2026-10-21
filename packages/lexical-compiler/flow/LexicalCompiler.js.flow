@@ -1,0 +1,26 @@
+/**
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+ * @flow strict
+ */
+
+/**
+ * LexicalCompiler
+ *
+ * Every pass, re-exported. Import a single pass from its own entry point
+ * (`@lexical/compiler/PureAnnotations`) to leave the rest unloaded.
+ *
+ * `export *`, as `src/index.ts` does, rather than one list per entry. Naming
+ * them here meant naming each one twice, and a name added to a pass was a name
+ * this file went on not having: `CompiledExpression`, `TableNaming`,
+ * `BindingNaming` and four helper-source constants were all missing from it,
+ * and the parity lint compares this file against the barrel rather than
+ * against each pass, so it saw a barrel that had simply stopped keeping up.
+ */
+
+export * from '@lexical/compiler/PureAnnotations';
+export * from '@lexical/compiler/SchemaJsonCodegen';
+export * from '@lexical/compiler/SubpathImports';

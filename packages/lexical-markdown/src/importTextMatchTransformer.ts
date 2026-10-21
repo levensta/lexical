@@ -6,12 +6,11 @@
  *
  */
 import type {TextMatchTransformer} from './MarkdownTransformers';
-
-import {type TextNode} from 'lexical';
+import type {TextNode} from 'lexical';
 
 export function findOutermostTextMatchTransformer(
   textNode_: TextNode,
-  textMatchTransformers: Array<TextMatchTransformer>,
+  textMatchTransformers: TextMatchTransformer[],
 ): {
   startIndex: number;
   endIndex: number;
@@ -82,6 +81,7 @@ export function importFoundTextMatchTransformer(
   transformer: TextMatchTransformer,
   match: RegExpMatchArray,
 ): {
+  matchedNode: TextNode;
   transformedNode?: TextNode;
   nodeBefore: TextNode | undefined; // If split
   nodeAfter: TextNode | undefined; // If split
@@ -103,6 +103,7 @@ export function importFoundTextMatchTransformer(
   const potentialTransformedNode = transformer.replace(transformedNode, match);
 
   return {
+    matchedNode: transformedNode,
     nodeAfter,
     nodeBefore,
     transformedNode: potentialTransformedNode || undefined,

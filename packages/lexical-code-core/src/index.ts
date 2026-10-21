@@ -7,11 +7,13 @@
  */
 
 export {CodeExtension} from './CodeExtension';
+export {registerCodeGutter} from './CodeGutter';
 export {
   $createCodeHighlightNode,
   $isCodeHighlightNode,
   CodeHighlightNode,
 } from './CodeHighlightNode';
+export {CodeImportRules} from './CodeImportExtension';
 export {
   type CodeIndentConfig,
   CodeIndentExtension,
@@ -32,4 +34,5 @@ export {
   $getLastCodeNodeOfLine,
   $getStartOfCodeInLine,
   $outdentLeadingSpaces,
+  $plainifyCodeContent,
 } from './FlatStructureUtils';

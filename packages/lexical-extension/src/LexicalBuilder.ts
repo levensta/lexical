@@ -6,6 +6,8 @@
  *
  */
 
+import invariant from '@lexical/internal/invariant';
+import {LEXICAL_VERSION} from '@lexical/internal/version';
 import {
   type AnyLexicalExtension,
   type AnyLexicalExtensionArgument,
@@ -22,24 +24,23 @@ import {
   type LexicalNode,
   mergeRegister,
 } from 'lexical';
-import invariant from 'shared/invariant';
 
 import {getNodeConfig} from './config';
-import {deepThemeMergeInPlace} from './deepThemeMergeInPlace';
+import {InitialStateExtension} from './InitialStateExtension';
+import {deepThemeMergeInPlace} from './internal/deepThemeMergeInPlace';
 import {
   applyPermanentMark,
   applyTemporaryMark,
   ExtensionRep,
   isExactlyPermanentExtensionRepState,
   isExactlyUnmarkedExtensionRepState,
-} from './ExtensionRep';
-import {InitialStateExtension} from './InitialStateExtension';
+} from './internal/ExtensionRep';
 
 /** @internal Use a well-known symbol for dev tools purposes */
 export const builderSymbol = Symbol.for('@lexical/extension/LexicalBuilder');
 
-type BuildCreateEditorArgs = Omit<CreateEditorArgs, 'onError'> &
-  Pick<InitialEditorConfig, 'onError' | '$initialEditorState'>;
+type BuildCreateEditorArgs = Omit<CreateEditorArgs, 'onError' | 'onWarn'> &
+  Pick<InitialEditorConfig, 'onError' | 'onWarn' | '$initialEditorState'>;
 
 /**
  * Build a LexicalEditor by combining together one or more extensions, optionally
@@ -108,7 +109,7 @@ function normalizeExtensionArgument(
   return Array.isArray(arg) ? arg : [arg];
 }
 
-const PACKAGE_VERSION = process.env.LEXICAL_VERSION!;
+const PACKAGE_VERSION = LEXICAL_VERSION;
 
 /** @internal */
 export class LexicalBuilder {
@@ -177,6 +178,7 @@ export class LexicalBuilder {
     const {
       $initialEditorState: _$initialEditorState,
       onError,
+      onWarn,
       ...editorConfig
     } = this.buildCreateEditorArgs();
     const editor = Object.assign(
@@ -186,6 +188,13 @@ export class LexicalBuilder {
           ? {
               onError: err => {
                 onError(err, editor);
+              },
+            }
+          : {}),
+        ...(onWarn
+          ? {
+              onWarn: err => {
+                onWarn(err, editor);
               },
             }
           : {}),
@@ -235,6 +244,10 @@ export class LexicalBuilder {
     }
   }
 
+  /**
+   * @param configs - Ownership passes to the builder, which retains the array
+   *   and may append to it. Callers must pass an array nobody else holds.
+   */
   addEdge(
     fromExtensionName: string,
     toExtensionName: string,
@@ -242,7 +255,17 @@ export class LexicalBuilder {
   ) {
     const outgoing = this.outgoingConfigEdges.get(fromExtensionName);
     if (outgoing) {
-      outgoing.set(toExtensionName, configs);
+      // An extension may reach the same dependency more than once (e.g. two
+      // configExtension entries for it, or both a direct and a peer
+      // dependency). Every config has to be kept in the order it was seen,
+      // otherwise all but the last would be silently discarded instead of
+      // merged.
+      const existing = outgoing.get(toExtensionName);
+      if (existing) {
+        existing.push(...configs);
+      } else {
+        outgoing.set(toExtensionName, configs);
+      }
     } else {
       this.outgoingConfigEdges.set(
         fromExtensionName,
@@ -417,6 +440,9 @@ export class LexicalBuilder {
       if (extension.onError !== undefined) {
         config.onError = extension.onError;
       }
+      if (extension.onWarn !== undefined) {
+        config.onWarn = extension.onWarn;
+      }
       if (extension.disableEvents !== undefined) {
         config.disableEvents = extension.disableEvents;
       }
@@ -468,7 +494,13 @@ export class LexicalBuilder {
       config.theme = theme;
     }
     if (nodes.size) {
-      config.nodes = [...nodes];
+      // `Array.from` rather than `[...nodes]` on purpose. Some downstream
+      // builds lower iterable spread in loose mode, where `[...x]` becomes
+      // `[].concat(x)` — correct for arrays, but it wraps any other iterable
+      // instead of expanding it. That turned this into `[Set]`, which
+      // `createEditor` then read as a `{replace, with}` node replacement and
+      // rejected with "nodes[0] undefined is not a constructor".
+      config.nodes = Array.from(nodes);
     }
     const hasImport = Object.keys(htmlImport).length > 0;
     const hasExport = htmlExport.size > 0;

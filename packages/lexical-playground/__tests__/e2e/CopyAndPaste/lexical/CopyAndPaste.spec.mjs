@@ -6,10 +6,12 @@
  *
  */
 import {
+  moveLeft,
+  moveRight,
   moveToEditorBeginning,
   moveToEditorEnd,
+  moveToLineBeginning,
   moveToLineEnd,
-  moveToPrevWord,
   selectAll,
 } from '../../../keyboardShortcuts/index.mjs';
 import {
@@ -47,7 +49,9 @@ test.describe('CopyAndPaste', () => {
           <p class="PlaygroundEditorTheme__paragraph" dir="auto">
             <span data-lexical-text="true">Copy + pasting?</span>
           </p>
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <br data-lexical-managed-linebreak="true" />
+          </p>
           <p class="PlaygroundEditorTheme__paragraph" dir="auto">
             <span data-lexical-text="true">Sounds good!</span>
           </p>
@@ -88,27 +92,20 @@ test.describe('CopyAndPaste', () => {
           <p class="PlaygroundEditorTheme__paragraph" dir="auto">
             <span data-lexical-text="true">Copy + pasting?</span>
           </p>
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <br data-lexical-managed-linebreak="true" />
+          </p>
           <p class="PlaygroundEditorTheme__paragraph" dir="auto">
             <span data-lexical-text="true">Sounds good!</span>
           </p>
         `,
       );
-      if (browserName === 'firefox' && IS_LINUX) {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [],
-          focusOffset: 3,
-          focusPath: [],
-        });
-      } else {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [0, 0, 0],
-          focusOffset: 12,
-          focusPath: [2, 0, 0],
-        });
-      }
+      await assertSelection(page, {
+        anchorOffset: 0,
+        anchorPath: [0, 0, 0],
+        focusOffset: 12,
+        focusPath: [2, 0, 0],
+      });
     } else {
       await assertHTML(
         page,
@@ -121,25 +118,17 @@ test.describe('CopyAndPaste', () => {
           </p>
         `,
       );
-      if (browserName === 'firefox' && IS_LINUX) {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [],
-          focusOffset: 1,
-          focusPath: [],
-        });
-      } else {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [0, 0, 0],
-          focusOffset: 12,
-          focusPath: [0, 3, 0],
-        });
-      }
+
+      await assertSelection(page, {
+        anchorOffset: 0,
+        anchorPath: [0, 0, 0],
+        focusOffset: 12,
+        focusPath: [0, 3, 0],
+      });
     }
 
     // Copy all the text
-    await withExclusiveClipboardAccess(async () => {
+    {
       const clipboard = await copyToClipboard(page);
       if (isRichText) {
         await assertHTML(
@@ -148,7 +137,9 @@ test.describe('CopyAndPaste', () => {
             <p class="PlaygroundEditorTheme__paragraph" dir="auto">
               <span data-lexical-text="true">Copy + pasting?</span>
             </p>
-            <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <br data-lexical-managed-linebreak="true" />
+            </p>
             <p class="PlaygroundEditorTheme__paragraph" dir="auto">
               <span data-lexical-text="true">Sounds good!</span>
             </p>
@@ -178,11 +169,15 @@ test.describe('CopyAndPaste', () => {
             <p class="PlaygroundEditorTheme__paragraph" dir="auto">
               <span data-lexical-text="true">Copy + pasting?</span>
             </p>
-            <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <br data-lexical-managed-linebreak="true" />
+            </p>
             <p class="PlaygroundEditorTheme__paragraph" dir="auto">
               <span data-lexical-text="true">Sounds good!Copy + pasting?</span>
             </p>
-            <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <br data-lexical-managed-linebreak="true" />
+            </p>
             <p class="PlaygroundEditorTheme__paragraph" dir="auto">
               <span data-lexical-text="true">Sounds good!</span>
             </p>
@@ -216,70 +211,66 @@ test.describe('CopyAndPaste', () => {
           focusPath: [0, 6, 0],
         });
       }
-    });
+    }
   });
 
-  test(`Copy and paste heading`, async ({
-    isPlainText,
-    isCollab,
-    page,
-    browserName,
-  }) => {
-    test.fixme(isCollab && IS_LINUX, 'Flaky on Linux + Collab');
-    test.skip(isPlainText);
+  test.describe(() => {
     test.fixme(
-      IS_LINUX && browserName === 'chromium',
+      ({browserName, isCollab, isPlainText}) => isCollab && IS_LINUX,
+      'Flaky on Linux + Collab',
+    );
+    test.skip(({browserName, isCollab, isPlainText}) => isPlainText);
+    test.fixme(
+      ({browserName, isCollab, isPlainText}) =>
+        IS_LINUX && browserName === 'chromium',
       'Flaky on Linux + Chromium',
     );
-
-    await focusEditor(page);
-    await page.keyboard.type('# Heading');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('Some text');
-
-    await moveToEditorBeginning(page);
-    await page.keyboard.down('Shift');
-    await moveToLineEnd(page);
-    await page.keyboard.up('Shift');
-
-    await withExclusiveClipboardAccess(async () => {
-      const clipboard = await copyToClipboard(page);
-
-      await moveToEditorEnd(page);
+    test(`Copy and paste heading`, async ({page}) => {
+      await focusEditor(page);
+      await page.keyboard.type('# Heading');
       await page.keyboard.press('Enter');
+      await page.keyboard.type('Some text');
 
-      // Paste the content
-      await pasteFromClipboard(page, clipboard);
+      await moveToEditorBeginning(page);
+      await page.keyboard.down('Shift');
+      await moveToLineEnd(page);
+      await page.keyboard.up('Shift');
 
-      await assertHTML(
-        page,
-        html`
-          <h1 class="PlaygroundEditorTheme__h1" dir="auto">
-            <span data-lexical-text="true">Heading</span>
-          </h1>
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-            <span data-lexical-text="true">Some text</span>
-          </p>
-          <h1 class="PlaygroundEditorTheme__h1" dir="auto">
-            <span data-lexical-text="true">Heading</span>
-          </h1>
-        `,
-      );
+      {
+        const clipboard = await copyToClipboard(page);
 
-      await assertSelection(page, {
-        anchorOffset: 7,
-        anchorPath: [2, 0, 0],
-        focusOffset: 7,
-        focusPath: [2, 0, 0],
-      });
+        await moveToEditorEnd(page);
+        await page.keyboard.press('Enter');
+
+        // Paste the content
+        await pasteFromClipboard(page, clipboard);
+
+        await assertHTML(
+          page,
+          html`
+            <h1 class="PlaygroundEditorTheme__h1" dir="auto">
+              <span data-lexical-text="true">Heading</span>
+            </h1>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <span data-lexical-text="true">Some text</span>
+            </p>
+            <h1 class="PlaygroundEditorTheme__h1" dir="auto">
+              <span data-lexical-text="true">Heading</span>
+            </h1>
+          `,
+        );
+
+        await assertSelection(page, {
+          anchorOffset: 7,
+          anchorPath: [2, 0, 0],
+          focusOffset: 7,
+          focusPath: [2, 0, 0],
+        });
+      }
     });
   });
 
-  test(`Copy and paste between sections`, async ({
-    isRichText,
-    page,
-    browserName,
-  }) => {
+  test(`Copy and paste between sections`, async ({isRichText, page}) => {
     await focusEditor(page);
     await page.keyboard.type('Hello world #foobar test #foobar2 when #not');
 
@@ -396,40 +387,22 @@ test.describe('CopyAndPaste', () => {
     await selectAll(page);
 
     if (isRichText) {
-      if (browserName === 'firefox' && IS_LINUX) {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [],
-          focusOffset: 2,
-          focusPath: [],
-        });
-      } else {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [0, 0, 0],
-          focusOffset: 4,
-          focusPath: [1, 5, 0],
-        });
-      }
+      await assertSelection(page, {
+        anchorOffset: 0,
+        anchorPath: [0, 0, 0],
+        focusOffset: 4,
+        focusPath: [1, 5, 0],
+      });
     } else {
-      if (browserName === 'firefox' && IS_LINUX) {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [],
-          focusOffset: 1,
-          focusPath: [],
-        });
-      } else {
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [0, 0, 0],
-          focusOffset: 4,
-          focusPath: [0, 12, 0],
-        });
-      }
+      await assertSelection(page, {
+        anchorOffset: 0,
+        anchorPath: [0, 0, 0],
+        focusOffset: 4,
+        focusPath: [0, 12, 0],
+      });
     }
 
-    await withExclusiveClipboardAccess(async () => {
+    {
       // Copy all the text
       let clipboard = await copyToClipboard(page);
       await page.keyboard.press('Delete');
@@ -541,14 +514,16 @@ test.describe('CopyAndPaste', () => {
         });
       }
 
-      await moveToPrevWord(page);
+      // Select backwards from "#|foo" in the second section to " |test " in
+      // the first. Shift+ArrowUp keeps the caret's x position, so where it
+      // lands on the line above depends on glyph widths, and how many word
+      // moves reach " test " from there depends on the platform. Extending to
+      // the start of that line and counting characters works with any font.
+      await moveLeft(page, 'foo'.length);
       await page.keyboard.down('Shift');
       await page.keyboard.press('ArrowUp');
-      await moveToPrevWord(page);
-      // Once more for linux on Chromium
-      if (IS_LINUX && browserName === 'chromium') {
-        await moveToPrevWord(page);
-      }
+      await moveToLineBeginning(page);
+      await moveRight(page, 'Hello world #foobar '.length);
       await page.keyboard.up('Shift');
 
       if (isRichText) {
@@ -682,53 +657,28 @@ test.describe('CopyAndPaste', () => {
       await selectAll(page);
 
       if (isRichText) {
-        if (browserName === 'firefox' && IS_LINUX) {
-          await assertSelection(page, {
-            anchorOffset: 0,
-            anchorPath: [],
-            focusOffset: 2,
-            focusPath: [],
-          });
-        } else {
-          if (browserName === 'firefox' && IS_LINUX) {
-            await assertSelection(page, {
-              anchorOffset: 0,
-              anchorPath: [0, 0, 0],
-              focusOffset: 3,
-              focusPath: [1, 5, 0],
-            });
-          } else {
-            await assertSelection(page, {
-              anchorOffset: 0,
-              anchorPath: [0, 0, 0],
-              focusOffset: 4,
-              focusPath: [1, 5, 0],
-            });
-          }
-        }
+        await assertSelection(page, {
+          anchorOffset: 0,
+          anchorPath: [0, 0, 0],
+          focusOffset: 4,
+          focusPath: [1, 5, 0],
+        });
       } else {
-        if (browserName === 'firefox' && IS_LINUX) {
-          await assertSelection(page, {
-            anchorOffset: 0,
-            anchorPath: [],
-            focusOffset: 1,
-            focusPath: [],
-          });
-        } else {
-          await assertSelection(page, {
-            anchorOffset: 0,
-            anchorPath: [0, 0, 0],
-            focusOffset: 4,
-            focusPath: [0, 12, 0],
-          });
-        }
+        await assertSelection(page, {
+          anchorOffset: 0,
+          anchorPath: [0, 0, 0],
+          focusOffset: 4,
+          focusPath: [0, 12, 0],
+        });
       }
 
       await page.keyboard.press('Delete');
       await assertHTML(
         page,
         html`
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <br data-lexical-managed-linebreak="true" />
+          </p>
         `,
       );
       await assertSelection(page, {
@@ -737,99 +687,96 @@ test.describe('CopyAndPaste', () => {
         focusOffset: 0,
         focusPath: [0],
       });
-    });
+    }
   });
 
-  test('Copy and paste an inline element into a leaf node', async ({
-    page,
-    isPlainText,
-  }) => {
-    test.skip(isPlainText);
-    await focusEditor(page);
+  test.describe(() => {
+    test.skip(({isPlainText}) => isPlainText);
+    test('Copy and paste an inline element into a leaf node', async ({
+      page,
+    }) => {
+      await focusEditor(page);
 
-    // Root
-    //   |- Paragraph
-    //      |- Link
-    //         |- Text "Hello"
-    //      |- Text "World"
-    await page.keyboard.type('Hello');
-    await selectAll(page);
-    await click(page, '.link');
-    await click(page, '.link-confirm');
-    await page.keyboard.press('ArrowRight');
-    await page.keyboard.press('Space');
-    await page.keyboard.type('World');
-
-    await selectAll(page);
-
-    await withExclusiveClipboardAccess(async () => {
-      const clipboard = await copyToClipboard(page);
-
+      // Root
+      //   |- Paragraph
+      //      |- Link
+      //         |- Text "Hello"
+      //      |- Text "World"
+      await page.keyboard.type('Hello');
+      await selectAll(page);
+      await click(page, '.link');
+      await click(page, '.link-confirm');
       await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Space');
+      await page.keyboard.type('World');
 
-      await pasteFromClipboard(page, clipboard);
+      await selectAll(page);
+
+      {
+        const clipboard = await copyToClipboard(page);
+
+        await page.keyboard.press('ArrowRight');
+
+        await pasteFromClipboard(page, clipboard);
+      }
+
+      await assertHTML(
+        page,
+        html`
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <a
+              class="PlaygroundEditorTheme__link"
+              href="https://"
+              rel="noreferrer">
+              <span data-lexical-text="true">Hello</span>
+            </a>
+            <span data-lexical-text="true">World</span>
+            <a
+              class="PlaygroundEditorTheme__link"
+              href="https://"
+              rel="noreferrer">
+              <span data-lexical-text="true">Hello</span>
+            </a>
+            <span data-lexical-text="true">World</span>
+          </p>
+        `,
+      );
     });
 
-    await assertHTML(
+    test('Copy + paste multi-line plain text into rich text produces separate paragraphs', async ({
       page,
-      html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-          <a
-            class="PlaygroundEditorTheme__link"
-            href="https://"
-            rel="noreferrer">
-            <span data-lexical-text="true">Hello</span>
-          </a>
-          <span data-lexical-text="true">World</span>
-          <a
-            class="PlaygroundEditorTheme__link"
-            href="https://"
-            rel="noreferrer">
-            <span data-lexical-text="true">Hello</span>
-          </a>
-          <span data-lexical-text="true">World</span>
-        </p>
-      `,
-    );
-  });
-
-  test('Copy + paste multi-line plain text into rich text produces separate paragraphs', async ({
-    page,
-    isPlainText,
-  }) => {
-    test.skip(isPlainText);
-    await focusEditor(page);
-    await page.keyboard.type('# Hello ');
-    await pasteFromClipboard(page, {
-      'text/plain': 'world\nAnd text below',
+    }) => {
+      await focusEditor(page);
+      await page.keyboard.type('# Hello ');
+      await pasteFromClipboard(page, {
+        'text/plain': 'world\nAnd text below',
+      });
+      await assertHTML(
+        page,
+        html`
+          <h1 class="PlaygroundEditorTheme__h1" dir="auto">
+            <span data-lexical-text="true">Hello world</span>
+          </h1>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <span data-lexical-text="true">And text below</span>
+          </p>
+        `,
+      );
     });
-    await assertHTML(
-      page,
-      html`
-        <h1 class="PlaygroundEditorTheme__h1" dir="auto">
-          <span data-lexical-text="true">Hello world</span>
-        </h1>
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-          <span data-lexical-text="true">And text below</span>
-        </p>
-      `,
-    );
   });
 
-  test(
-    'Pasting a decorator node on a blank line inserts before the line',
-    {
-      tag: '@flaky',
-    },
-    async ({page, isCollab, isPlainText}) => {
+  test.describe(() => {
+    test.skip(({isCollab, isPlainText}) => isPlainText || isCollab);
+    test('Pasting a decorator node on a blank line inserts before the line', async ({
+      page,
+    }) => {
       // TODO: This is skipped on collab because the right frame won't have the block cursor HTML
-      test.skip(isPlainText || isCollab);
 
       // copying and pasting the node is easier than creating the clipboard data
       await focusEditor(page);
       await insertYouTubeEmbed(page, YOUTUBE_SAMPLE_URL);
       await page.keyboard.press('ArrowLeft'); // this selects the node
-      await withExclusiveClipboardAccess(async () => {
+      {
         const clipboard = await copyToClipboard(page);
         await page.keyboard.press('ArrowRight'); // this moves to a new line (empty paragraph node)
         await pasteFromClipboard(page, clipboard);
@@ -837,7 +784,9 @@ test.describe('CopyAndPaste', () => {
         await assertHTML(
           page,
           html`
-            <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <br data-lexical-managed-linebreak="true" />
+            </p>
             <div contenteditable="false" data-lexical-decorator="true">
               <div class="PlaygroundEditorTheme__embedBlock">
                 <iframe
@@ -868,52 +817,50 @@ test.describe('CopyAndPaste', () => {
               data-lexical-cursor="true"></div>
           `,
         );
-      });
-    },
-  );
-
-  test('Copy and paste paragraph into quote', async ({page, isPlainText}) => {
-    test.skip(isPlainText);
-    await focusEditor(page);
-
-    await page.keyboard.type('Hello world');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('Some text');
-
-    await selectAll(page);
-
-    await withExclusiveClipboardAccess(async () => {
-      const clipboard = await copyToClipboard(page);
-
-      await page.keyboard.type('> ');
-
-      await pasteFromClipboard(page, clipboard);
+      }
     });
-    await assertHTML(
-      page,
-      html`
-        <blockquote class="PlaygroundEditorTheme__quote" dir="auto">
-          <span data-lexical-text="true">Hello world</span>
-        </blockquote>
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-          <span data-lexical-text="true">Some text</span>
-        </p>
-      `,
-    );
   });
 
-  test('Process font-size from content copied from Google Docs/MS Word', async ({
-    page,
-    isPlainText,
-  }) => {
-    test.skip(isPlainText);
-    await focusEditor(page);
+  test.describe(() => {
+    test.skip(({isPlainText}) => isPlainText);
+    test('Copy and paste paragraph into quote', async ({page}) => {
+      await focusEditor(page);
 
-    const clipboard = {
-      'text/html': `<meta charset='utf-8'><meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-1e6b36e2-7fff-9788-e6e2-d502cc6babbf"><p dir="ltr" style="line-height:1.56;margin-top:10pt;margin-bottom:0pt;"><span style="font-size:24pt;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">Random text at </span><span style="font-size:36pt;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">36 pt</span></p></b>`,
-    };
+      await page.keyboard.type('Hello world');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Some text');
 
-    await withExclusiveClipboardAccess(async () => {
+      await selectAll(page);
+
+      {
+        const clipboard = await copyToClipboard(page);
+
+        await page.keyboard.type('> ');
+
+        await pasteFromClipboard(page, clipboard);
+      }
+      await assertHTML(
+        page,
+        html`
+          <blockquote class="PlaygroundEditorTheme__quote" dir="auto">
+            <span data-lexical-text="true">Hello world</span>
+          </blockquote>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <span data-lexical-text="true">Some text</span>
+          </p>
+        `,
+      );
+    });
+
+    test('Process font-size from content copied from Google Docs/MS Word', async ({
+      page,
+    }) => {
+      await focusEditor(page);
+
+      const clipboard = {
+        'text/html': `<meta charset='utf-8'><meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-1e6b36e2-7fff-9788-e6e2-d502cc6babbf"><p dir="ltr" style="line-height:1.56;margin-top:10pt;margin-bottom:0pt;"><span style="font-size:24pt;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">Random text at </span><span style="font-size:36pt;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">36 pt</span></p></b>`,
+      };
+
       await pasteFromClipboard(page, clipboard);
 
       await assertHTML(
@@ -928,20 +875,16 @@ test.describe('CopyAndPaste', () => {
         `,
       );
     });
-  });
 
-  test('test font-size in pt and px both are processed correctly', async ({
-    page,
-    isPlainText,
-  }) => {
-    test.skip(isPlainText);
-    await focusEditor(page);
+    test('test font-size in pt and px both are processed correctly', async ({
+      page,
+    }) => {
+      await focusEditor(page);
 
-    const clipboard = {
-      'text/html': `<meta charset='utf-8'><meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-2d2ed25f-7fff-2f5a-2422-f7e624a743db"><p dir="ltr" style="line-height:1.56;margin-top:10pt;margin-bottom:0pt;"><span style="font-size:24px;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">Text in 24px</span></p><p dir="ltr" style="line-height:1.56;margin-top:10pt;margin-bottom:0pt;"><span style="font-size:36pt;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">Text in 36pt</span></p></b>`,
-    };
+      const clipboard = {
+        'text/html': `<meta charset='utf-8'><meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-2d2ed25f-7fff-2f5a-2422-f7e624a743db"><p dir="ltr" style="line-height:1.56;margin-top:10pt;margin-bottom:0pt;"><span style="font-size:24px;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">Text in 24px</span></p><p dir="ltr" style="line-height:1.56;margin-top:10pt;margin-bottom:0pt;"><span style="font-size:36pt;font-family:Lato,sans-serif;color:#000000;background-color:transparent;font-weight:400;font-style:normal;font-variant:normal;text-decoration:none;vertical-align:baseline;white-space:pre;white-space:pre-wrap;">Text in 36pt</span></p></b>`,
+      };
 
-    await withExclusiveClipboardAccess(async () => {
       await pasteFromClipboard(page, clipboard);
 
       await assertHTML(
@@ -990,7 +933,9 @@ test.describe('CopyAndPaste', () => {
       await assertHTML(
         page,
         html`
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <br data-lexical-managed-linebreak="true" />
+          </p>
         `,
       );
 

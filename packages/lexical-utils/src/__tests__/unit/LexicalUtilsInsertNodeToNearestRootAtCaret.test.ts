@@ -6,6 +6,8 @@
  *
  */
 
+// @vitest-environment node
+
 import {buildEditorFromExtensions, defineExtension} from '@lexical/extension';
 import {RichTextExtension} from '@lexical/rich-text';
 import {
@@ -15,13 +17,12 @@ import {
   $getRoot,
   $getSiblingCaret,
   $getTextPointCaret,
+  $insertNodeToNearestRootAtCaret,
   $isElementNode,
-  LexicalNode,
-  SplitAtPointCaretNextOptions,
+  type LexicalNode,
+  type SplitAtPointCaretNextOptions,
 } from 'lexical';
 import {describe, expect, test} from 'vitest';
-
-import {$insertNodeToNearestRootAtCaret} from '../..';
 
 function $serialize(node: LexicalNode): string {
   if (!$isElementNode(node)) {

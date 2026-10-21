@@ -41,7 +41,7 @@ export function canContainTransformableMarkdown(
 export function importTextTransformers(
   textNode: TextNode,
   textFormatTransformersIndex: TextFormatTransformersIndex,
-  textMatchTransformers: Array<TextMatchTransformer>,
+  textMatchTransformers: TextMatchTransformer[],
 ) {
   let foundTextFormat = findOutermostTextFormatTransformer(
     textNode,
@@ -54,8 +54,24 @@ export function importTextTransformers(
   );
 
   if (foundTextFormat && foundTextMatch) {
-    // Find the outermost transformer
-    if (
+    if (foundTextFormat.isCodeSpan) {
+      // Code spans bind tighter than text-match transformers (e.g. equations
+      // or links). A code span must never be partially consumed by a text
+      // match, so prefer the code format unless the text match fully wraps it
+      // (in which case the code span is part of the match's raw content).
+      // https://github.com/facebook/lexical/issues/8687
+      if (
+        foundTextMatch.startIndex <= foundTextFormat.startIndex &&
+        foundTextMatch.endIndex >= foundTextFormat.endIndex
+      ) {
+        // foundTextMatch wraps the code span - apply foundTextMatch
+        foundTextFormat = null;
+      } else {
+        // Apply the code span
+        foundTextMatch = null;
+      }
+    } else if (
+      // Find the outermost transformer
       (foundTextFormat.startIndex <= foundTextMatch.startIndex &&
         foundTextFormat.endIndex >= foundTextMatch.endIndex) ||
       // foundTextMatch is not contained within foundTextFormat
@@ -131,11 +147,26 @@ export function importTextTransformers(
         textFormatTransformersIndex,
         textMatchTransformers,
       );
+    } else if (
+      result.transformedNode === undefined &&
+      canContainTransformableMarkdown(result.matchedNode) &&
+      result.matchedNode.getParent() !== null
+    ) {
+      // A void return may leave the matched node in place or move it into a
+      // new parent. Read its escapes once without trying the same match again.
+      // A parent also exists when importing into a detached tree.
+      result.matchedNode.setTextContent(
+        unescapeText(result.matchedNode.getTextContent()),
+      );
     }
   }
 
-  // Handle escape characters
-  const textContent = textNode.getTextContent();
-  const unescapedText = unescapeText(textContent);
-  textNode.setTextContent(unescapedText);
+  // Handle escape characters. Only a node that no transformer matched is
+  // unescaped here: retained non-code results above have already had their
+  // escapes read, and code spans must keep their backslashes.
+  if (!foundTextFormat && !foundTextMatch) {
+    const textContent = textNode.getTextContent();
+    const unescapedText = unescapeText(textContent);
+    textNode.setTextContent(unescapedText);
+  }
 }

@@ -6,12 +6,17 @@
  *
  */
 
-import type {RangeSelection, TextNode} from '.';
 import type {PointType} from './LexicalSelection';
 
-import {$isElementNode, $isTextNode} from '.';
+import {
+  $isElementNode,
+  $isTextNode,
+  type RangeSelection,
+  type TextNode,
+} from '.';
 import {nodeStatesAreEquivalent} from './LexicalNodeState';
 import {getActiveEditor} from './LexicalUpdates';
+import {$isEmptyCompositionTarget} from './LexicalUtils';
 
 function $canSimpleTextNodesBeMerged(
   node1: TextNode,
@@ -48,6 +53,10 @@ function $mergeTextNodes(node1: TextNode, node2: TextNode): TextNode {
 export function $normalizeTextNode(textNode: TextNode): void {
   let node = textNode;
 
+  if ($isEmptyCompositionTarget(node)) {
+    return;
+  }
+
   if (node.__text === '' && node.isSimpleText() && !node.isUnmergeable()) {
     node.remove();
     return;
@@ -62,6 +71,9 @@ export function $normalizeTextNode(textNode: TextNode): void {
     previousNode.isSimpleText() &&
     !previousNode.isUnmergeable()
   ) {
+    if ($isEmptyCompositionTarget(previousNode)) {
+      break;
+    }
     if (previousNode.__text === '') {
       previousNode.remove();
     } else if ($canSimpleTextNodesBeMerged(previousNode, node)) {
@@ -81,6 +93,9 @@ export function $normalizeTextNode(textNode: TextNode): void {
     nextNode.isSimpleText() &&
     !nextNode.isUnmergeable()
   ) {
+    if ($isEmptyCompositionTarget(nextNode)) {
+      break;
+    }
     if (nextNode.__text === '') {
       nextNode.remove();
     } else if ($canSimpleTextNodesBeMerged(node, nextNode)) {
@@ -92,6 +107,7 @@ export function $normalizeTextNode(textNode: TextNode): void {
   }
 }
 
+/** Descends element-type anchor and focus points of a RangeSelection toward the deepest text-type points, stopping at non-element leaf nodes. */
 export function $normalizeSelection(selection: RangeSelection): RangeSelection {
   $normalizePoint(selection.anchor);
   $normalizePoint(selection.focus);

@@ -8,9 +8,9 @@
     "html"
   ],
   "license": "MIT",
-  "version": "0.44.0",
-  "main": "LexicalHtml.js",
-  "types": "index.d.ts",
+  "version": "0.52.0",
+  "main": "./dist/LexicalHtml.js",
+  "types": "./dist/typescript-too-old.d.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/facebook/lexical.git",
@@ -18,27 +18,50 @@
   },
   "dependencies": {
     "@lexical/extension": "workspace:*",
+    "@lexical/internal": "workspace:*",
     "@lexical/selection": "workspace:*",
     "@lexical/utils": "workspace:*",
     "lexical": "workspace:*"
   },
-  "module": "LexicalHtml.mjs",
+  "module": "./dist/LexicalHtml.js",
   "sideEffects": false,
   "exports": {
     ".": {
-      "import": {
-        "types": "./index.d.ts",
-        "development": "./LexicalHtml.dev.mjs",
-        "production": "./LexicalHtml.prod.mjs",
-        "node": "./LexicalHtml.node.mjs",
-        "default": "./LexicalHtml.mjs"
-      },
-      "require": {
-        "types": "./index.d.ts",
-        "development": "./LexicalHtml.dev.js",
-        "production": "./LexicalHtml.prod.js",
-        "default": "./LexicalHtml.js"
-      }
+      "source": "./src/index.ts",
+      "types@<5.2": "./dist/typescript-too-old.d.ts",
+      "types": "./dist/index.d.ts",
+      "development": "./dist/LexicalHtml.dev.js",
+      "production": "./dist/LexicalHtml.prod.js",
+      "default": "./dist/LexicalHtml.js"
     }
-  }
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/__tests__",
+    "!src/__bench__",
+    "!src/__mocks__",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "!src/**/*.bench.ts",
+    "!src/**/*.bench.tsx",
+    "README.md",
+    "LICENSE"
+  ],
+  "typesVersions": {
+    "*": {
+      "*": [
+        "./dist/typescript-too-old.d.ts"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "typescript": ">=5.2"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "type": "module"
 }

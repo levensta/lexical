@@ -61,8 +61,10 @@ export function wrapTableHtml(
           m => [m[1], m[2]],
         );
         const dirAttr = attrs.find(([k]) => k === 'dir');
-        const divAttrs = [
-          dirAttr,
+        const outerDivAttrs = [dirAttr]
+          .filter(Boolean)
+          .map(([k, v]) => `${k}="${v}"`);
+        const innerDivAttrs = [
           !ignoreClasses && [
             'class',
             'PlaygroundEditorTheme__tableScrollableWrapper',
@@ -73,15 +75,21 @@ export function wrapTableHtml(
         const tableAttrs = attrs
           .filter(([k]) => k !== 'dir')
           .map(([k, v]) => `${k}="${v}"`);
-        return `<div ${divAttrs.join(' ')}><table ${tableAttrs.join(' ')}>`;
+        return `<div ${outerDivAttrs.join(' ')}><div ${innerDivAttrs.join(' ')}><table ${tableAttrs.join(' ')}>`;
       })
-      .replace(/<\/table>/g, '</table></div>')}
+      .replace(/<\/table>/g, '</table></div></div>')}
   `;
 }
 
-export async function initialize({
+export async function initialize(options) {
+  return test.step('Initialize playground', () =>
+    initializePlayground(options));
+}
+
+async function initializePlayground({
   page,
   isCollab,
+  selectBlock,
   isAutocomplete,
   isCharLimit,
   isCharLimitUtf8,
@@ -97,6 +105,7 @@ export async function initialize({
   tableHorizontalScroll,
   shouldAllowHighlightingWithBrackets,
   selectionAlwaysOnDisplay,
+  isShadowDOM,
 }) {
   const appSettings = {};
   appSettings.isRichText = IS_RICH_TEXT;
@@ -132,50 +141,206 @@ export async function initialize({
     !!shouldAllowHighlightingWithBrackets;
 
   appSettings.selectionAlwaysOnDisplay = !!selectionAlwaysOnDisplay;
+  // The playground app defaults `selectBlock` to true (see appSettings.ts),
+  // but the e2e harness pins it to false unless a spec opts in (e.g.
+  // SelectBlock.spec.mjs), so the rest of the suite keeps the legacy
+  // whole-document SELECT_ALL semantics that selectAll()/clearEditor() rely
+  // on. This setting is always written to the URL so the app default never
+  // leaks into an e2e run.
+  appSettings.selectBlock = !!selectBlock;
+
+  appSettings.isShadowDOM = !!isShadowDOM;
 
   const urlParams = appSettingsToURLParams(appSettings);
   const url = `http://localhost:${E2E_PORT}/${
     isCollab ? 'split/' : ''
   }?${urlParams.toString()}`;
 
-  // Having more horizontal space prevents redundant text wraps for tests
-  // which affects CMD+ArrowRight/Left navigation
-  page.setViewportSize({height: 1000, width: isCollab ? 2500 : 1250});
-  await page.goto(url);
+  // Start listening for uncaught page errors *before* navigating so that a
+  // failure during the editor's initial build (e.g. a misconfigured or
+  // conflicting extension set) fails the test fast, instead of silently
+  // waiting for the editor selector until the long per-test timeout -- which,
+  // multiplied across retries and every test in a mode, can hang a whole CI
+  // shard for hours.
+  const pageError = rejectOnPageError(page);
 
-  await exposeLexicalEditor(page);
+  if (isShadowDOM) {
+    // Walk open shadow roots to find the editor's contentEditable. Used by
+    // shadow DOM specs that synthesize events at a node inside the shadow
+    // tree; document.querySelector does not pierce shadow boundaries.
+    await page.addInitScript(() => {
+      window.__findShadowEditor = function findEditor(root) {
+        const direct = root.querySelector(
+          'div[contenteditable="true"][data-lexical-editor="true"]',
+        );
+        if (direct !== null) {
+          return direct;
+        }
+        for (const el of root.querySelectorAll('*')) {
+          if (el.shadowRoot !== null) {
+            const inner = findEditor(el.shadowRoot);
+            if (inner !== null) {
+              return inner;
+            }
+          }
+        }
+        return null;
+      };
+    });
+  }
+
+  // The split page's load event also waits for iframe subresources. The
+  // explicit provider/editor checks below determine collaboration readiness.
+  await page.goto(url, {waitUntil: isCollab ? 'domcontentloaded' : 'load'});
+
+  await exposeLexicalEditor(page, pageError);
+}
+
+/**
+ * Returns a promise that rejects as soon as the page emits an uncaught
+ * ("pageerror") exception, so callers can race it against an editor-ready
+ * wait and fail fast when the app crashes on load instead of timing out.
+ * Attach this *before* navigating so an error thrown during the initial
+ * render is not missed.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @returns {Promise<never>}
+ */
+function rejectOnPageError(page) {
+  const promise = new Promise((_resolve, reject) => {
+    page.on('pageerror', error => {
+      reject(
+        new Error(
+          'The page threw an uncaught error before the editor was ready. ' +
+            'This usually means the editor failed to build for this mode ' +
+            '(check the extension configuration):\n' +
+            (error.stack || error.message || String(error)),
+        ),
+      );
+    });
+  });
+  // The race below may not be attached yet when the error fires (it can throw
+  // during navigation), so swallow here to avoid an unhandled rejection; the
+  // race still observes the same rejection when it awaits this promise.
+  promise.catch(() => {});
+  return promise;
+}
+
+/**
+ * Wait for one collab iframe to finish booting: its toolbar toggle reports a
+ * live provider ("Disconnect" is what it offers once connected) and the editor
+ * has rendered at least one paragraph.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {'left' | 'right'} name the iframe's name attribute
+ */
+export async function waitForCollabFrame(page, name) {
+  const frameLocator = page.frameLocator(`[name="${name}"]`);
+  await expect(frameLocator.locator('.action-button.connect')).toHaveAttribute(
+    'title',
+    /Disconnect/,
+    {timeout: 15000},
+  );
+  await expect(
+    frameLocator.locator('[data-lexical-editor="true"] p').first(),
+  ).toBeVisible({timeout: 15000});
+}
+
+/**
+ * Reload a single collab iframe and wait until it has booted and reconnected.
+ *
+ * A bare `contentDocument.location.reload()` returns as soon as the navigation
+ * is *scheduled*, so a following `assertHTML` has to absorb the whole reload —
+ * bundle fetch, editor mount, websocket connect and the initial Yjs sync —
+ * inside its own 5s polling budget. On a loaded CI runner that overruns, and
+ * the assertion fails while the frame is still booting (the contenteditable
+ * isn't in the DOM yet), which is an intermittent failure that has nothing to
+ * do with what the test is checking. Wait for the navigation to actually start
+ * and for the frame to come back up, so the assertion that follows measures the
+ * restored document rather than the page load.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {'left' | 'right'} name the iframe's name attribute
+ */
+export async function reloadCollabFrame(page, name) {
+  const navigated = page.waitForEvent(
+    'framenavigated',
+    frame => frame.name() === name,
+  );
+  await page.evaluate(frameName => {
+    document
+      .querySelector(`iframe[name="${frameName}"]`)
+      .contentDocument.location.reload();
+  }, name);
+  await navigated;
+  await waitForCollabFrame(page, name);
 }
 
 /**
  * @param {import('@playwright/test').Page} page
+ * @param {Promise<never> | null} pageError a promise that rejects if the page
+ *   throws an uncaught error, so a broken load fails fast instead of waiting
+ *   for the editor selector until the test timeout. See {@link rejectOnPageError}.
  */
-async function exposeLexicalEditor(page) {
+async function exposeLexicalEditor(page, pageError = null) {
   if (IS_COLLAB) {
-    await Promise.all(
-      ['left', 'right'].map(async name => {
-        const frameLocator = page.frameLocator(`[name="${name}"]`);
-        await expect(
-          frameLocator.locator('.action-button.connect'),
-        ).toHaveAttribute('title', /Disconnect/);
-        await expect(
-          frameLocator.locator('[data-lexical-editor="true"] p'),
-        ).toBeVisible();
-      }),
-    );
+    // The split view loads the playground in two iframes that connect to a
+    // single shared y-websocket server. Under parallel test load one frame
+    // occasionally fails to boot/activate collab within the timeout (its
+    // ".action-button.connect" toolbar button never appears, or the websocket
+    // connect/backoff runs long) -- the dominant residual source of @flaky
+    // collab failures. Reload and retry a few times so a transient
+    // boot/connect hiccup during setup doesn't fail the whole test.
+    const waitForCollabFramesReady = () =>
+      Promise.all(
+        ['left', 'right'].map(name => waitForCollabFrame(page, name)),
+      );
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await waitForCollabFramesReady();
+        break;
+      } catch (err) {
+        if (attempt >= 2) {
+          throw err;
+        }
+        await page.reload({waitUntil: 'domcontentloaded'});
+      }
+    }
     // Ensure that they started up with the correct empty state
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
   }
   const leftFrame = getPageOrFrame(page);
-  await leftFrame.waitForSelector('.tree-view-output pre');
+  await Promise.race(
+    [leftFrame.waitForSelector('.tree-view-output pre'), pageError].filter(
+      Boolean,
+    ),
+  );
   await leftFrame.evaluate(() => {
-    window.lexicalEditor = document.querySelector(
-      '[data-lexical-editor="true"]',
-    ).__lexicalEditor;
+    // querySelector does not pierce shadow roots, so descend into any open
+    // shadow trees to support the "Render in Shadow DOM" playground setting.
+    const findEditorElement = root => {
+      const found = root.querySelector('[data-lexical-editor="true"]');
+      if (found !== null) {
+        return found;
+      }
+      for (const element of root.querySelectorAll('*')) {
+        if (element.shadowRoot !== null) {
+          const inner = findEditorElement(element.shadowRoot);
+          if (inner !== null) {
+            return inner;
+          }
+        }
+      }
+      return null;
+    };
+    window.lexicalEditor = findEditorElement(document).__lexicalEditor;
   });
 }
 
@@ -183,11 +348,13 @@ export const test = base.extend({
   hasLinkAttributes: false,
   isCharLimit: false,
   isCharLimitUtf8: false,
-  /** @type {number | false} */
-  isCollab: IS_COLLAB_V1 ? 1 : IS_COLLAB_V2 ? 2 : false,
+  // Editor mode is fixed by the worker's environment. Worker-scoped fixtures
+  // let skip callbacks run before any parent beforeEach hook creates a page
+  // or initializes the playground, including skips in nested describe blocks.
+  isCollab: [IS_COLLAB_V1 ? 1 : IS_COLLAB_V2 ? 2 : false, {scope: 'worker'}],
   isMaxLength: false,
-  isPlainText: IS_PLAIN_TEXT,
-  isRichText: IS_RICH_TEXT,
+  isPlainText: [IS_PLAIN_TEXT, {scope: 'worker'}],
+  isRichText: [IS_RICH_TEXT, {scope: 'worker'}],
   selectionAlwaysOnDisplay: false,
   shouldAllowHighlightingWithBrackets: false,
   shouldUseLexicalContextMenu: false,
@@ -218,14 +385,34 @@ export async function clickSelectors(page, selectors) {
 function removeSafariLinebreakImgHack(actualHtml) {
   return E2E_BROWSER === 'webkit'
     ? actualHtml.replaceAll(
-        /<img (?:[^>]+ )?data-lexical-linebreak="true"(?: [^>]+)?>/g,
+        /<img (?:[^>]+ )?data-lexical-managed-linebreak="true"(?: [^>]+)?>/g,
         '',
       )
     : actualHtml;
 }
 
+/**
+ * The reconciler parks a zero-size, out-of-flow `<img>` outside a leading or
+ * trailing block DecoratorNode so browsers keep painting the selection
+ * highlight for a range that ends on that boundary (#8922). It is invisible
+ * scaffolding, so keep it out of the HTML the specs assert on.
+ */
+function removeDecoratorBoundaryAnchors(actualHtml) {
+  return actualHtml.replaceAll(
+    /<img (?:[^>]+ )?data-lexical-decorator-boundary="true"(?: [^>]+)?>/g,
+    '',
+  );
+}
+
 function removeDropTargetAttributes(actualHtml) {
   return actualHtml.replaceAll(/ data-drop-target-for-element="true"/g, '');
+}
+
+function removeStickyScrollbar(actualHtml) {
+  return actualHtml
+    .replace(/<div[^>]*\baria-hidden="true"[^>]*><div[^>]*><\/div><\/div>/g, '')
+    .replace(/\s*data-lexical-sticky-scrollbar="true"/g, '')
+    .replace(/\s*style="scrollbar-width: none;?"/g, '');
 }
 
 /**
@@ -246,12 +433,16 @@ async function assertHTMLOnPageOrFrame(
     ignoreInlineStyles,
   });
   return await expect(async () => {
-    const actualHtml = removeDropTargetAttributes(
-      removeSafariLinebreakImgHack(
-        await pageOrFrame
-          .locator('div[contenteditable="true"]')
-          .first()
-          .innerHTML(),
+    const actualHtml = removeStickyScrollbar(
+      removeDropTargetAttributes(
+        removeDecoratorBoundaryAnchors(
+          removeSafariLinebreakImgHack(
+            await pageOrFrame
+              .locator('div[contenteditable="true"]')
+              .first()
+              .innerHTML(),
+          ),
+        ),
       ),
     );
     let actual = await prettifyHTML(actualHtml.replace(/\n/gm, ''), {
@@ -281,7 +472,7 @@ export async function withExclusiveClipboardAccess(f) {
     retries: 5,
   });
   try {
-    return f();
+    return await f();
   } finally {
     await release();
   }
@@ -363,115 +554,187 @@ export function getPageOrFrame(page) {
 }
 
 export async function assertTableSelectionCoordinates(page, coordinates) {
-  const pageOrFrame = getPageOrFrame(page);
+  await expect(async () => {
+    const pageOrFrame = getPageOrFrame(page);
 
-  const {_anchor, _focus} = await pageOrFrame.evaluate(() => {
-    const editor = window.lexicalEditor;
-    const editorState = editor.getEditorState();
-    const selection = editorState._selection;
-    if (!selection.tableKey) {
-      throw new Error('Expected table selection');
-    }
-    const anchorElement = editor.getElementByKey(selection.anchor.key);
-    const focusElement = editor.getElementByKey(selection.focus.key);
-    return {
-      _anchor: {
-        x: anchorElement._cell?.x,
-        y: anchorElement._cell?.y,
-      },
-      _focus: {
-        x: focusElement._cell?.x,
-        y: focusElement._cell?.y,
-      },
-    };
-  });
+    const {_anchor, _focus} = await pageOrFrame.evaluate(() => {
+      const editor = window.lexicalEditor;
+      const editorState = editor.getEditorState();
+      const selection = editorState._selection;
+      if (!selection?.tableKey) {
+        throw new Error('Expected table selection');
+      }
+      const anchorElement = editor.getElementByKey(selection.anchor.key);
+      const focusElement = editor.getElementByKey(selection.focus.key);
+      return {
+        _anchor: {
+          x: anchorElement._cell?.x,
+          y: anchorElement._cell?.y,
+        },
+        _focus: {
+          x: focusElement._cell?.x,
+          y: focusElement._cell?.y,
+        },
+      };
+    });
 
-  if (coordinates.anchor) {
-    if (coordinates.anchor.x !== undefined) {
-      expect(_anchor.x).toEqual(coordinates.anchor.x);
+    if (coordinates.anchor) {
+      if (coordinates.anchor.x !== undefined) {
+        expect(_anchor.x).toEqual(coordinates.anchor.x);
+      }
+      if (coordinates.anchor.y !== undefined) {
+        expect(_anchor.y).toEqual(coordinates.anchor.y);
+      }
     }
-    if (coordinates.anchor.y !== undefined) {
-      expect(_anchor.y).toEqual(coordinates.anchor.y);
+    if (coordinates.focus) {
+      if (coordinates.focus.x !== undefined) {
+        expect(_focus.x).toEqual(coordinates.focus.x);
+      }
+      if (coordinates.focus.y !== undefined) {
+        expect(_focus.y).toEqual(coordinates.focus.y);
+      }
     }
-  }
-  if (coordinates.focus) {
-    if (coordinates.focus.x !== undefined) {
-      expect(_focus.x).toEqual(coordinates.focus.x);
-    }
-    if (coordinates.focus.y !== undefined) {
-      expect(_focus.y).toEqual(coordinates.focus.y);
-    }
-  }
+  }).toPass({intervals: [20, 50, 100], timeout: 5000});
 }
 
 async function assertSelectionOnPageOrFrame(page, expected) {
-  // Assert the selection of the editor matches the snapshot
-  const selection = await page.evaluate(() => {
-    const rootElement = document.querySelector('div[contenteditable="true"]');
+  await expect(async () => {
+    // Assert the selection of the editor matches the snapshot
+    const selection = await page.evaluate(() => {
+      const rootElement = document.querySelector('div[contenteditable="true"]');
 
-    const getPathFromNode = node => {
-      const path = [];
-      if (node === rootElement) {
-        return [];
-      }
-      while (node !== null) {
-        const parent = node.parentNode;
-        if (parent === null || node === rootElement) {
-          break;
+      // The zero-size anchors the reconciler parks outside a leading / trailing
+      // block decorator (#8922) occupy a DOM child slot but no lexical one, so
+      // discount them from both paths and offsets. Keep these helpers in step
+      // with the playground's TestRecorderPlugin, which records the paths and
+      // offsets that this asserts.
+      const boundaryAnchorsBefore = (parent, index) => {
+        const children = parent.childNodes;
+        let count = 0;
+        for (let i = 0; i < index && i < children.length; i++) {
+          const child = children[i];
+          if (
+            child.nodeType === Node.ELEMENT_NODE &&
+            child.getAttribute('data-lexical-decorator-boundary') === 'true'
+          ) {
+            count++;
+          }
         }
-        path.push(Array.from(parent.childNodes).indexOf(node));
-        node = parent;
-      }
-      return path.reverse();
-    };
+        return count;
+      };
 
-    const fixOffset = (node, offset) => {
-      // If the selection offset is at the br of a webkit img+br linebreak
-      // then move the offset to the img so the tests are consistent across
-      // browsers
-      if (node && node.nodeType === Node.ELEMENT_NODE && offset > 0) {
-        const child = node.children[offset - 1];
+      const getPathFromNode = node => {
+        const path = [];
+        if (node === rootElement) {
+          return [];
+        }
+        while (node !== null) {
+          const parent = node.parentNode;
+          if (parent === null || node === rootElement) {
+            break;
+          }
+          const index = Array.from(parent.childNodes).indexOf(node);
+          path.push(index - boundaryAnchorsBefore(parent, index));
+          node = parent;
+        }
+        return path.reverse();
+      };
+
+      const fixOffset = (node, offset) => {
+        if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+          return offset;
+        }
+        // If the selection offset is at the br of a webkit img+br linebreak
+        // then move the offset to the img so the tests are consistent across
+        // browsers. Look the child up by the DOM offset: a leading anchor can
+        // precede it in the same element.
+        const child = offset > 0 ? node.childNodes[offset - 1] : null;
+        const lexicalOffset = offset - boundaryAnchorsBefore(node, offset);
         if (
           child &&
           child.nodeType === Node.ELEMENT_NODE &&
-          child.getAttribute('data-lexical-linebreak') === 'true'
+          child.nodeName === 'IMG' &&
+          child.getAttribute('data-lexical-managed-linebreak') === 'true'
         ) {
-          return offset - 1;
+          return lexicalOffset - 1;
         }
-      }
-      return offset;
-    };
+        return lexicalOffset;
+      };
 
-    const {anchorNode, anchorOffset, focusNode, focusOffset} =
-      window.getSelection();
+      const {anchorNode, anchorOffset, focusNode, focusOffset} =
+        window.getSelection();
 
-    return {
-      anchorOffset: fixOffset(anchorNode, anchorOffset),
-      anchorPath: getPathFromNode(anchorNode),
-      focusOffset: fixOffset(focusNode, focusOffset),
-      focusPath: getPathFromNode(focusNode),
-    };
-  });
-  expect(selection.anchorPath).toEqual(expected.anchorPath);
-  expect(selection.focusPath).toEqual(expected.focusPath);
-  if (Array.isArray(expected.anchorOffset)) {
-    const [start, end] = expected.anchorOffset;
-    expect(selection.anchorOffset).toBeGreaterThanOrEqual(start);
-    expect(selection.anchorOffset).toBeLessThanOrEqual(end);
-  } else {
-    expect(selection.anchorOffset).toEqual(expected.anchorOffset);
-  }
-  if (Array.isArray(expected.focusOffset)) {
-    const [start, end] = expected.focusOffset;
-    expect(selection.focusOffset).toBeGreaterThanOrEqual(start);
-    expect(selection.focusOffset).toBeLessThanOrEqual(end);
-  } else {
-    expect(selection.focusOffset).toEqual(expected.focusOffset);
-  }
+      return {
+        anchorOffset: fixOffset(anchorNode, anchorOffset),
+        anchorPath: getPathFromNode(anchorNode),
+        focusOffset: fixOffset(focusNode, focusOffset),
+        focusPath: getPathFromNode(focusNode),
+      };
+    });
+    expect(selection.anchorPath).toEqual(expected.anchorPath);
+    expect(selection.focusPath).toEqual(expected.focusPath);
+    if (Array.isArray(expected.anchorOffset)) {
+      const [start, end] = expected.anchorOffset;
+      expect(selection.anchorOffset).toBeGreaterThanOrEqual(start);
+      expect(selection.anchorOffset).toBeLessThanOrEqual(end);
+    } else {
+      expect(selection.anchorOffset).toEqual(expected.anchorOffset);
+    }
+    if (Array.isArray(expected.focusOffset)) {
+      const [start, end] = expected.focusOffset;
+      expect(selection.focusOffset).toBeGreaterThanOrEqual(start);
+      expect(selection.focusOffset).toBeLessThanOrEqual(end);
+    } else {
+      expect(selection.focusOffset).toEqual(expected.focusOffset);
+    }
+  }).toPass({intervals: [20, 50, 100], timeout: 5000});
 }
 
 export async function assertSelection(page, expected) {
   await assertSelectionOnPageOrFrame(getPageOrFrame(page), expected);
+}
+
+// Native caret movement and Lexical's selectionchange handler complete in
+// separate tasks. Editing tests need both selections at the intended point
+// before sending the next key, especially a destructive one.
+export async function assertCaret(page, selector, offset) {
+  await expect
+    .poll(() =>
+      evaluate(
+        page,
+        target => {
+          const editor = window.lexicalEditor;
+          const element = editor
+            .getRootElement()
+            .querySelector(target.selector);
+          const domSelection = window.getSelection();
+          const selection = editor.getEditorState()._selection;
+          return {
+            domCollapsed: domSelection?.isCollapsed,
+            domOffset: domSelection?.anchorOffset,
+            domTarget:
+              element !== null &&
+              (domSelection?.anchorNode === element ||
+                domSelection?.anchorNode === element.firstChild),
+            modelCollapsed: selection?.isCollapsed(),
+            modelOffset: selection?.anchor?.offset,
+            modelTarget:
+              element !== null &&
+              selection?.anchor !== undefined &&
+              editor.getElementByKey(selection.anchor.key) === element,
+          };
+        },
+        {selector},
+      ),
+    )
+    .toEqual({
+      domCollapsed: true,
+      domOffset: offset,
+      domTarget: true,
+      modelCollapsed: true,
+      modelOffset: offset,
+      modelTarget: true,
+    });
 }
 
 export async function isMac(page) {
@@ -525,8 +788,30 @@ export async function keyUpCtrlOrAlt(page) {
 
 async function copyToClipboardPageOrFrame(pageOrFrame) {
   return await pageOrFrame.evaluate(() => {
+    // document.querySelector doesn't pierce shadow roots; descend into any
+    // open shadow trees so this works for the "Render in Shadow DOM"
+    // playground setting too. Match `data-lexical-editor` rather than any
+    // contenteditable so we don't accidentally grab a comment/draft input
+    // that also has contenteditable=true.
+    const findEditor = root => {
+      const direct = root.querySelector(
+        'div[contenteditable="true"][data-lexical-editor="true"]',
+      );
+      if (direct !== null) {
+        return direct;
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot !== null) {
+          const inner = findEditor(el.shadowRoot);
+          if (inner !== null) {
+            return inner;
+          }
+        }
+      }
+      return null;
+    };
     const clipboardData = {};
-    const editor = document.querySelector('div[contenteditable="true"]');
+    const editor = findEditor(document);
     const copyEvent = new ClipboardEvent('copy');
     Object.defineProperty(copyEvent, 'clipboardData', {
       value: {
@@ -540,6 +825,7 @@ async function copyToClipboardPageOrFrame(pageOrFrame) {
   });
 }
 
+// Capture the editor's copy payload without accessing the system clipboard.
 export async function copyToClipboard(page) {
   return await copyToClipboardPageOrFrame(getPageOrFrame(page));
 }
@@ -554,6 +840,7 @@ async function pasteWithClipboardDataFromPageOrFrame(
     async ({
       clipboardData: _clipboardData,
       canUseBeforeInput: _canUseBeforeInput,
+      editorSelector: _editorSelector,
     }) => {
       const files = [];
       for (const [clipboardKey, clipboardValue] of Object.entries(
@@ -572,7 +859,7 @@ async function pasteWithClipboardDataFromPageOrFrame(
         eventClipboardData = {
           files,
           getData(type, value) {
-            return _clipboardData[type];
+            return _clipboardData[type] || '';
           },
           types: [...Object.keys(_clipboardData), 'Files'],
         };
@@ -580,16 +867,41 @@ async function pasteWithClipboardDataFromPageOrFrame(
         eventClipboardData = {
           files,
           getData(type, value) {
-            return _clipboardData[type];
+            return _clipboardData[type] || '';
           },
           types: Object.keys(_clipboardData),
         };
       }
 
+      // document.querySelector doesn't pierce shadow roots; descend into any
+      // open shadow trees so paste works for the "Render in Shadow DOM"
+      // playground setting too. Match `data-lexical-editor` (not just any
+      // contenteditable) so a draft/comment input doesn't shadow the real
+      // editor when activeElement is not contenteditable.
+      const findEditor = root => {
+        const direct = root.querySelector(
+          'div[contenteditable="true"][data-lexical-editor="true"]',
+        );
+        if (direct !== null) {
+          return direct;
+        }
+        for (const el of root.querySelectorAll('*')) {
+          if (el.shadowRoot !== null) {
+            const inner = findEditor(el.shadowRoot);
+            if (inner !== null) {
+              return inner;
+            }
+          }
+        }
+        return null;
+      };
+      const activeElement = document.activeElement;
       const editor =
-        document.activeElement && document.activeElement.isContentEditable
-          ? document.activeElement
-          : document.querySelector(editorSelector);
+        activeElement &&
+        activeElement.isContentEditable &&
+        activeElement.matches(_editorSelector)
+          ? activeElement
+          : findEditor(document);
       const pasteEvent = new ClipboardEvent('paste', {
         bubbles: true,
         cancelable: true,
@@ -614,11 +926,13 @@ async function pasteWithClipboardDataFromPageOrFrame(
         }
       }
     },
-    {canUseBeforeInput, clipboardData},
+    {canUseBeforeInput, clipboardData, editorSelector},
   );
 }
 
 /**
+ * Paste supplied data through a DOM event, or omit it for a native keyboard paste.
+ *
  * @param {import('@playwright/test').Page} page
  */
 export async function pasteFromClipboard(
@@ -641,6 +955,130 @@ export async function pasteFromClipboard(
 
 export async function sleep(delay) {
   await new Promise(resolve => setTimeout(resolve, delay));
+}
+
+/**
+ * Wait for one timer task in the page. On Chrome for macOS, Lexical ignores an
+ * insertText that arrives before a zero-delay timer after a handled Backspace
+ * or select all, because the OS can use it to accept a pending text
+ * replacement. A real keystroke always comes after that timer, but text
+ * Playwright types with `Input.insertText` (an emoji, or any character with no
+ * key on the US layout) can arrive before it on a busy machine and be dropped.
+ * Timers with the same delay run in order, so once ours has run, Lexical's has
+ * too.
+ */
+export async function waitForTimerTick(page) {
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+}
+
+/**
+ * Force a new undo group (a "merge boundary") deterministically — a drop-in
+ * replacement for `sleep(mergeWindow + overhead)`. Works in both editor modes
+ * and picks the right mechanism automatically:
+ *
+ * - **Local history** (`@lexical/history`): coalesces consecutive same-type
+ *   edits while `now() < prevChangeTime + delay`. We drive the extension's
+ *   `now` output signal directly — the lever called out in the task — freezing
+ *   it `delay + overheadMs` past its current value. The next edit is then
+ *   guaranteed to exceed the merge window (new boundary), while later edits
+ *   observe a fixed time so genuinely fast edits still coalesce as in
+ *   production. History reads `now` via `peek()`, so reassigning the signal
+ *   neither re-registers history nor disturbs in-progress merge bookkeeping.
+ * - **Collab** (Yjs `UndoManager`, which `@lexical/history` is disabled in
+ *   favor of): the manager coalesces changes within its own `captureTimeout`
+ *   using `Date.now()`, which isn't injectable. Its public `stopCapturing()`
+ *   resets the window (`lastChange = 0`) so the next change starts a fresh
+ *   stack item — the deterministic equivalent of advancing past the window.
+ *   The manager is published on the editor by `useYjsUndoManager`; see
+ *   `Symbol.for('@lexical/yjs/UndoManager')`.
+ *
+ * Both replace wall-clock sleeps, which are slow and, under CI load, flaky: a
+ * timer that fires late can coalesce edits meant to stay separate (or vice
+ * versa).
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {number} [overheadMs] slack added past the local-history `delay`,
+ *   mirroring the old `sleep(delay + 50)` convention.
+ */
+export async function advanceHistoryClock(page, overheadMs = 50) {
+  await evaluate(
+    page,
+    overhead => {
+      const editor = document.querySelector(
+        '[data-lexical-editor="true"]',
+      ).__lexicalEditor;
+      // Collab: reset the Yjs UndoManager's capture window.
+      const undoManager = editor[Symbol.for('@lexical/yjs/UndoManager')];
+      if (undoManager) {
+        undoManager.stopCapturing();
+        return;
+      }
+      // Local history: freeze `now` past the merge delay.
+      const builder = editor[Symbol.for('@lexical/extension/LexicalBuilder')];
+      const output = builder?.extensionNameMap.get('@lexical/history/History')
+        ?.state?.output;
+      if (output && !output.disabled.value) {
+        const frozen = output.now.peek()() + output.delay.peek() + overhead;
+        output.now.value = () => frozen;
+        return;
+      }
+      throw new Error(
+        'advanceHistoryClock: no active undo mechanism found on the editor ' +
+          '(expected the Yjs UndoManager in collab, or an enabled ' +
+          '@lexical/history extension otherwise)',
+      );
+    },
+    overheadMs,
+  );
+}
+
+/**
+ * Make collaborative undo grouping deterministic by removing the Yjs
+ * `UndoManager`'s wall-clock capture window for the editor under test.
+ *
+ * In collab, `@lexical/history` is disabled in favor of the Yjs `UndoManager`,
+ * which coalesces consecutive local edits into a single undo stack item only
+ * while each lands within `captureTimeout` (500ms by default) of the previous
+ * one, measured with `Date.now()`. Unlike the local-history clock that
+ * {@link advanceHistoryClock} drives, that timer isn't injectable — so under CI
+ * load a stall longer than the window silently splits one logical edit group
+ * across several stack items. A later `undo()` then reverts only the last
+ * fragment, which is the intermittent "expected an empty paragraph, received
+ * leftover typed text / a leftover list item" failure this guards against.
+ *
+ * Setting `captureTimeout` to Infinity drops the time dimension entirely:
+ * grouping is then governed solely by explicit boundaries — `advanceHistoryClock`
+ * (which calls `stopCapturing()`) and the `stopCapturing()` the `UndoManager`
+ * performs automatically after every undo/redo. Both reset `lastChange` to 0 so
+ * the next edit opens a fresh stack item, while everything in between always
+ * coalesces regardless of timing. This makes "type a burst, then undo it as a
+ * unit" reliable without changing any behavior the tests assert: a run that
+ * happened to stay under the 500ms window already grouped the same way.
+ *
+ * No-op outside collab, where `advanceHistoryClock` already drives a
+ * deterministic clock.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function freezeCollabUndoGrouping(page) {
+  if (!IS_COLLAB) {
+    return;
+  }
+  // Collab connects asynchronously, so the UndoManager may not be published the
+  // instant the editor mounts — poll until it is, then disable the capture
+  // window in place. The predicate's mutation is intentional and idempotent: it
+  // returns true (ending the poll) only on the tick it runs.
+  await getPageOrFrame(page).waitForFunction(() => {
+    const editor = document.querySelector(
+      '[data-lexical-editor="true"]',
+    )?.__lexicalEditor;
+    const undoManager = editor?.[Symbol.for('@lexical/yjs/UndoManager')];
+    if (!undoManager) {
+      return false;
+    }
+    undoManager.captureTimeout = Infinity;
+    return true;
+  });
 }
 
 // Fair time for the browser to process a newly inserted image
@@ -669,6 +1107,33 @@ export async function waitForSelector(page, selector, options) {
   await getPageOrFrame(page).waitForSelector(selector, options);
 }
 
+/**
+ * Wait until `optionText` is the *highlighted* (aria-selected) option in the
+ * typeahead / mentions menu, so a subsequent `Enter` deterministically commits
+ * it.
+ *
+ * The mentions lookup is asynchronous and incremental: while e.g. "@Luke" is
+ * being typed, the partial query "Lu" also matches options that sort earlier —
+ * the "Lu" results list "Agent Kallus" (kal**lu**s) at index 0 and only list
+ * "Luke Skywalker" at index 2. Those intermediate result sets resolve on their
+ * own timers, so waiting merely for the option *text* to be present and then
+ * pressing Enter (which commits the highlighted index 0) is racy: under load
+ * the Enter can land while an intermediate list is showing and commit the wrong
+ * option. Waiting for the option to be highlighted is deterministic because the
+ * settled list always highlights the intended option at index 0.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} optionText
+ * @param {Parameters<import('@playwright/test').Page['waitForSelector']>[1]} [options]
+ */
+export async function waitForTypeaheadMenuOption(page, optionText, options) {
+  await waitForSelector(
+    page,
+    `#typeahead-menu ul li[aria-selected="true"]:has-text("${optionText}")`,
+    options,
+  );
+}
+
 export function locate(page, selector) {
   return getPageOrFrame(page).locator(selector);
 }
@@ -678,15 +1143,13 @@ export async function selectorBoundingBox(page, selector) {
 }
 
 export async function click(page, selector, options) {
-  const frame = getPageOrFrame(page);
-  await frame.waitForSelector(selector, options);
-  await frame.click(selector, options);
+  // Playwright already waits for the target to be visible, enabled and stable.
+  // A separate wait repeats that work and adds a protocol round trip per click.
+  await getPageOrFrame(page).click(selector, options);
 }
 
 export async function doubleClick(page, selector, options) {
-  const frame = getPageOrFrame(page);
-  await frame.waitForSelector(selector, options);
-  await frame.dblclick(selector, options);
+  await getPageOrFrame(page).dblclick(selector, options);
 }
 
 export async function focus(page, selector, options) {
@@ -713,6 +1176,7 @@ export async function clearEditor(page) {
   await selectAll(page);
   await page.keyboard.press('Backspace');
   await page.keyboard.press('Backspace');
+  await waitForTimerTick(page);
 }
 
 export async function insertSampleImage(page, modifier) {
@@ -753,6 +1217,17 @@ export async function insertUploadImage(page, files, altText) {
     await page.keyboard.type(altText);
   }
   await click(page, 'button[data-test-id="image-modal-file-upload-btn"]');
+}
+
+// Selection and embed-wrapper tests exercise the iframe element, not the
+// remote player's network requests and cross-origin event handlers.
+export async function stubYouTubePlayer(page) {
+  await page.route('https://www.youtube-nocookie.com/embed/**', route =>
+    route.fulfill({
+      body: '<!doctype html><title>YouTube embed fixture</title>',
+      contentType: 'text/html',
+    }),
+  );
 }
 
 export async function insertYouTubeEmbed(page, url) {
@@ -830,7 +1305,6 @@ export async function dragMouse(
     offsetEnd = {x: 0, y: 0},
     mouseDown = true,
     mouseUp = true,
-    slow = false,
   } = opts;
   let fromX = fromBoundingBox.x;
   let fromY = fromBoundingBox.y;
@@ -855,7 +1329,7 @@ export async function dragMouse(
   if (mouseDown) {
     await page.mouse.down();
   }
-  await page.mouse.move(toX, toY, slow ? 10 : 1);
+  await page.mouse.move(toX, toY);
   if (mouseUp) {
     await page.mouse.up();
   }
@@ -874,6 +1348,10 @@ export async function dragImage(
     {positionEnd, positionStart},
   );
 }
+
+// The two collab clients, undo/redo assertions and polling frequently format
+// identical DOM. Share in-flight work too, while bounding retained snapshots.
+const htmlFormattingCache = new Map();
 
 export async function prettifyHTML(
   string,
@@ -895,7 +1373,11 @@ export async function prettifyHTML(
 
   output = output.replace(/\s__playwright_target__="[^"]+"/, '');
 
-  return await prettier.format(output, {
+  const cached = htmlFormattingCache.get(output);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const formatted = prettier.format(output, {
     attributeGroups: ['$DEFAULT', '^data-'],
     attributeSort: 'asc',
     bracketSameLine: true,
@@ -903,6 +1385,11 @@ export async function prettifyHTML(
     parser: 'html',
     plugins: ['prettier-plugin-organize-attributes'],
   });
+  htmlFormattingCache.set(output, formatted);
+  if (htmlFormattingCache.size > 128) {
+    htmlFormattingCache.delete(htmlFormattingCache.keys().next().value);
+  }
+  return formatted;
 }
 
 // This function does not suppose to do anything, it's only used as a trigger
@@ -1031,7 +1518,7 @@ export async function selectCellsFromTableCords(
 
   // const firstBox = await firstRowFirstColumnCell.boundingBox();
   // const secondBox = await secondRowSecondCell.boundingBox();
-  // await dragMouse(page, firstBox, secondBox, {slow: true});
+  // await dragMouse(page, firstBox, secondBox);
 }
 
 export async function clickTableCellActiveButton(page) {
@@ -1135,22 +1622,60 @@ export async function enableCompositionKeyEvents(page) {
   });
 }
 
+/**
+ * CDP-based IME composition helper for e2e tests.
+ *
+ * Plays an IME composition sequence through Chrome DevTools Protocol,
+ * replacing the verbose per-step client.send() calls that are
+ * copy-pasted across Composition.spec tests.
+ *
+ * @param {import('@playwright/test').CDPSession} client
+ * @param {string[]} steps - Intermediate composing text at each keystroke.
+ * @param {string} [commitText] - Final committed text. Defaults to last step.
+ */
+export async function imeCompose(client, steps, commitText) {
+  const finalText = commitText ?? steps[steps.length - 1];
+  for (const text of steps) {
+    await client.send('Input.imeSetComposition', {
+      selectionEnd: text.length,
+      selectionStart: text.length,
+      text,
+    });
+  }
+  await client.send('Input.insertText', {text: finalText});
+}
+
+// Pre-built Hiragana sequences used across multiple e2e tests.
+export const HIRAGANA_SUSHI = {
+  commitText: 'すし',
+  steps: ['ｓ', 'す', 'すｓ', 'すｓｈ', 'すし'],
+};
+
+export const HIRAGANA_MOJIA = {
+  commitText: 'もじあ',
+  steps: ['m', 'も', 'もj', 'もじ', 'もじあ'],
+};
+
+/**
+ * Types "すし もじあ" using CDP IME — the full sequence used in most
+ * Composition.spec tests.
+ */
+export async function typeSushiMojia(client, page) {
+  await imeCompose(client, HIRAGANA_SUSHI.steps, HIRAGANA_SUSHI.commitText);
+  await client.send('Input.insertText', {text: ' '});
+  await imeCompose(client, HIRAGANA_MOJIA.steps, HIRAGANA_MOJIA.commitText);
+}
+
 export async function pressToggleBold(page) {
-  await keyDownCtrlOrMeta(page);
-  await page.keyboard.press('b');
-  await keyUpCtrlOrMeta(page);
+  await page.keyboard.press('ControlOrMeta+b');
 }
 
 export async function pressToggleItalic(page) {
-  await keyDownCtrlOrMeta(page);
-  await page.keyboard.press('i');
-  await keyUpCtrlOrMeta(page);
+  await page.keyboard.press('ControlOrMeta+i');
 }
 
 export async function pressToggleUnderline(page) {
-  await keyDownCtrlOrMeta(page);
-  await page.keyboard.press('u');
-  await keyUpCtrlOrMeta(page);
+  await page.keyboard.press('ControlOrMeta+u');
 }
 
 export async function dragDraggableMenuTo(

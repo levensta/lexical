@@ -48,7 +48,13 @@ function getErrorMap(filepath) {
  * @property {boolean} noMinify
  */
 
-const invariantExpressions = [
+const errorExpressions = [
+  {
+    dev: 'createDevError',
+    name: 'createError',
+    prod: 'createProdError',
+    prodNoCode: 'createDevError',
+  },
   {
     dev: 'formatDevErrorMessage',
     name: 'invariant',
@@ -66,7 +72,7 @@ const invariantExpressions = [
 /**
  * @param {import('@babel/core')} babel
  * @param {Partial<TransformErrorMessagesOptions>} opts
- * @returns {Promise<import('@babel/core').PluginObj>}
+ * @returns {{visitor: {CallExpression: (path: any, file: any) => void}}} a Babel plugin (path/file are untyped Babel AST nodes)
  */
 export default function transformErrorMessages(babel, opts) {
   const t = babel.types;
@@ -79,8 +85,22 @@ export default function transformErrorMessages(babel, opts) {
         const node = path.node;
         const {extractCodes, noMinify} =
           /** @type Partial<TransformErrorMessagesOptions> */ (file.opts);
-        for (const {name, dev, prod, prodNoCode} of invariantExpressions) {
-          if (path.get('callee').isIdentifier({name})) {
+        const callee = path.get('callee');
+        for (const {name, dev, prod, prodNoCode} of errorExpressions) {
+          const isErrorFactory = name === 'createError';
+          if (
+            isErrorFactory
+              ? callee.isIdentifier() &&
+                (callee.referencesImport(
+                  '@lexical/internal/createError',
+                  'default',
+                ) ||
+                  callee.referencesImport(
+                    '@lexical/internal/createError.js',
+                    'default',
+                  ))
+              : callee.isIdentifier({name})
+          ) {
             // Turns this code:
             //
             // invariant(condition, 'A %s message that contains %s', adj, noun);
@@ -98,9 +118,12 @@ export default function transformErrorMessages(babel, opts) {
             // where ERR_CODE is an error code: a unique identifier (a number
             // string) that references a verbose error message. The mapping is
             // stored in `scripts/error-codes/codes.json`.
+            const messageIndex = isErrorFactory ? 0 : 1;
             const condition = node.arguments[0];
-            const errorMsgLiteral = evalToString(node.arguments[1]);
-            const errorMsgExpressions = Array.from(node.arguments.slice(2));
+            const errorMsgLiteral = evalToString(node.arguments[messageIndex]);
+            const errorMsgExpressions = Array.from(
+              node.arguments.slice(messageIndex + 1),
+            );
             const errorMsgQuasis = errorMsgLiteral
               .split('%s')
               .map(raw => t.templateElement({cooked: String.raw({raw}), raw}));
@@ -113,7 +136,10 @@ export default function transformErrorMessages(babel, opts) {
             );
 
             const parentStatementPath = path.parentPath;
-            if (parentStatementPath.type !== 'ExpressionStatement') {
+            if (
+              !isErrorFactory &&
+              parentStatementPath.type !== 'ExpressionStatement'
+            ) {
               throw path.buildCodeFrameError(
                 `${name}() cannot be called from expression context. Move the call to its own statement.`,
               );
@@ -123,10 +149,10 @@ export default function transformErrorMessages(babel, opts) {
             // so we can extractCodes in a non-production build.
             let prodErrorId = errorMap.getOrAddToErrorMap(
               errorMsgLiteral,
-              extractCodes,
+              extractCodes ?? false,
             );
 
-            /** @type {babel.types.CallExpression} */
+            /** @type {import('@babel/core').types.CallExpression} */
             let callExpression;
             if (noMinify || prodErrorId === undefined) {
               // Error minification is disabled for this build.
@@ -138,9 +164,11 @@ export default function transformErrorMessages(babel, opts) {
               const moduleName =
                 prodErrorId === undefined && !noMinify ? prodNoCode : dev;
               const formatDevErrorMessageIdentifier =
-                helperModuleImports.addDefault(path, `shared/${moduleName}`, {
-                  nameHint: moduleName,
-                });
+                helperModuleImports.addDefault(
+                  path,
+                  `@lexical/internal/${moduleName}`,
+                  {nameHint: moduleName},
+                );
               callExpression = t.callExpression(
                 formatDevErrorMessageIdentifier,
                 [devMessage],
@@ -155,9 +183,11 @@ export default function transformErrorMessages(babel, opts) {
 
               // Import ReactErrorProd
               const formatProdErrorMessageIdentifier =
-                helperModuleImports.addDefault(path, `shared/${prod}`, {
-                  nameHint: prod,
-                });
+                helperModuleImports.addDefault(
+                  path,
+                  `@lexical/internal/${prod}`,
+                  {nameHint: prod},
+                );
 
               // Outputs:
               //   formatProdErrorMessage(ERR_CODE, adj, noun);
@@ -167,12 +197,18 @@ export default function transformErrorMessages(babel, opts) {
               );
             }
 
-            parentStatementPath.replaceWith(
-              t.ifStatement(
-                t.unaryExpression('!', condition),
-                t.blockStatement([t.expressionStatement(callExpression)]),
-              ),
-            );
+            if (isErrorFactory) {
+              // Preserve expression evaluation order and let the caller decide
+              // whether to throw, warn, or otherwise report the error.
+              path.replaceWith(callExpression);
+            } else {
+              parentStatementPath.replaceWith(
+                t.ifStatement(
+                  t.unaryExpression('!', condition),
+                  t.blockStatement([t.expressionStatement(callExpression)]),
+                ),
+              );
+            }
 
             if (!noMinify && prodErrorId === undefined) {
               // There is no error code for this message. Add an inline comment
@@ -184,7 +220,7 @@ export default function transformErrorMessages(babel, opts) {
               //   if (!condition) {
               //     formatDevErrorMessage(`A ${adj} message that contains ${noun}`);
               //   }
-              parentStatementPath.addComment(
+              (isErrorFactory ? path : parentStatementPath).addComment(
                 'leading',
                 'FIXME (minify-errors-in-prod): Unminified error message in production build!',
               );

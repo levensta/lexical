@@ -7,22 +7,60 @@
  */
 
 import type {LexicalEditor} from './LexicalEditor';
-import type {LexicalNode, NodeMap, SerializedLexicalNode} from './LexicalNode';
+import type {
+  LexicalNode,
+  NodeKey,
+  NodeMap,
+  ParsableSerializedNode,
+  SerializedLexicalNode,
+  SerializedPartial,
+} from './LexicalNode';
 import type {BaseSelection} from './LexicalSelection';
-import type {SerializedElementNode} from './nodes/LexicalElementNode';
-import type {SerializedRootNode} from './nodes/LexicalRootNode';
 
-import invariant from 'shared/invariant';
+import invariant from '@lexical/internal/invariant';
 
+import {cloneMap} from './LexicalGenMap';
+import {$exportNodeJSON, $withCompactExport} from './LexicalSerializedExport';
+import {$getSlot, $getSlotNames} from './LexicalSlot';
 import {readEditorState} from './LexicalUpdates';
 import {$getRoot} from './LexicalUtils';
-import {$isElementNode} from './nodes/LexicalElementNode';
-import {$createRootNode} from './nodes/LexicalRootNode';
+import {
+  $isElementNode,
+  type SerializedElementNode,
+} from './nodes/LexicalElementNode';
+import {
+  $createRootNode,
+  type SerializedRootNode,
+} from './nodes/LexicalRootNode';
 
-export interface SerializedEditorState<
-  T extends SerializedLexicalNode = SerializedLexicalNode,
-> {
-  root: SerializedRootNode<T>;
+export interface SerializedEditorState {
+  root: SerializedRootNode;
+}
+
+/**
+ * A document written in the compact form, which omits from every node the
+ * properties parsing restores on its own. The two forms describe the same
+ * document, and both parse; this one is smaller and can only be read by a
+ * Lexical new enough to restore what it left out.
+ *
+ * Distinct from {@link SerializedEditorState} because the shapes differ:
+ * a property the form omitted is absent, so promising the full type would
+ * promise values that are not there.
+ */
+export interface CompactSerializedEditorState {
+  root: SerializedPartial<SerializedRootNode>;
+}
+
+/**
+ * A document as a structural subtree — what {@link $parseSerializedNode}
+ * accepts at every level — for a caller holding serialized nodes rather than
+ * a `SerializedEditorState`: `@lexical/clipboard`'s `BaseSerializedNode[]`
+ * from `$generateJSONFromSelectedNodes`, whose `version` is optional and whose
+ * interface carries no index signature, matched neither of the two forms
+ * above and could not be handed back to `parseEditorState` without a cast.
+ */
+export interface ParsableSerializedEditorState {
+  root: ParsableSerializedNode;
 }
 
 export function editorStateHasDirtySelection(
@@ -46,45 +84,48 @@ export function editorStateHasDirtySelection(
 }
 
 export function cloneEditorState(current: EditorState): EditorState {
-  return new EditorState(new Map(current._nodeMap));
+  return new EditorState(cloneMap(current._nodeMap), null, current._slotsUsed);
 }
 
 export function createEmptyEditorState(): EditorState {
-  return new EditorState(new Map([['root', $createRootNode()]]));
+  return new EditorState(new Map([['root', $createRootNode()]]), null, false);
 }
 
-function exportNodeToJSON<SerializedNode extends SerializedLexicalNode>(
+function $exportNodeToJSON<SerializedNode extends SerializedLexicalNode>(
   node: LexicalNode,
 ): SerializedNode {
-  const serializedNode = node.exportJSON();
   const nodeClass = node.constructor;
 
-  if (serializedNode.type !== nodeClass.getType()) {
-    invariant(
-      false,
-      'LexicalNode: Node %s does not match the serialized type. Check if .exportJSON() is implemented and it is returning the correct type.',
-      nodeClass.name,
-    );
-  }
+  // The active export decides the form: the compact form drops properties that
+  // parsing would restore from their schema default anyway.
+  const serializedNode = $exportNodeJSON(node);
 
   if ($isElementNode(node)) {
     const serializedChildren = (serializedNode as SerializedElementNode)
       .children;
-    if (!Array.isArray(serializedChildren)) {
-      invariant(
-        false,
-        'LexicalNode: Node %s is an element but .exportJSON() does not have a children array.',
-        nodeClass.name,
-      );
-    }
-
     const children = node.getChildren();
 
     for (let i = 0; i < children.length; i++) {
-      const child = children[i];
-      const serializedChildNode = exportNodeToJSON(child);
-      serializedChildren.push(serializedChildNode);
+      serializedChildren.push($exportNodeToJSON(children[i]));
     }
+  }
+
+  // Slots ride in a separate Map on every LexicalNode (an ElementNode or a
+  // DecoratorNode host), so serialize them outside the element branch.
+  const slotNames = $getSlotNames(node);
+  if (slotNames.length > 0) {
+    const serializedSlots: Record<string, SerializedLexicalNode> = {};
+    for (const name of slotNames) {
+      const slotNode = $getSlot(node, name);
+      invariant(
+        slotNode !== null,
+        'LexicalNode: Node %s has slot "%s" but it resolved to no node during export.',
+        nodeClass.name,
+        name,
+      );
+      serializedSlots[name] = $exportNodeToJSON(slotNode);
+    }
+    serializedNode.$slots = serializedSlots;
   }
 
   // @ts-expect-error
@@ -104,19 +145,47 @@ export function $isEditorState(x: unknown): x is EditorState {
 
 export class EditorState {
   _nodeMap: NodeMap;
+  /**
+   * Nodes detached during the update, keyed by the previous node map. Yjs
+   * uses these hints to distinguish moved nodes from shifted siblings. A
+   * restored state must not replay hints from a different transition, and
+   * weak keys avoid retaining previous editor states through this metadata.
+   * @internal
+   */
+  _movedNodes: null | WeakMap<NodeMap, Set<NodeKey>>;
   _selection: null | BaseSelection;
   _flushSync: boolean;
   _readOnly: boolean;
+  /**
+   * True if this EditorState was parsed without running transforms
+   */
+  _parsed: boolean;
+  /**
+   * True if this EditorState or the LexicalEditor that created it has
+   * ever used slots
+   */
+  _slotsUsed: boolean;
 
-  constructor(nodeMap: NodeMap, selection?: null | BaseSelection) {
+  constructor(
+    nodeMap: NodeMap,
+    selection: null | BaseSelection = null,
+    slotsUsed: boolean = false,
+  ) {
     this._nodeMap = nodeMap;
+    this._movedNodes = null;
     this._selection = selection || null;
     this._flushSync = false;
     this._readOnly = false;
+    this._parsed = false;
+    this._slotsUsed = slotsUsed;
   }
 
   isEmpty(): boolean {
-    return this._nodeMap.size === 1 && this._selection === null;
+    // `<= 1` rather than `=== 1`: a state whose node map is empty has not even
+    // got a root, which is emptier still, and every caller treats an empty
+    // state as one not to use — `setEditorState` refuses it with an invariant
+    // rather than committing an editor with no root for `$getRoot` to find.
+    return this._nodeMap.size <= 1 && this._selection === null;
   }
 
   read<V>(callbackFn: () => V, options?: EditorStateReadOptions): V {
@@ -131,14 +200,50 @@ export class EditorState {
     const editorState = new EditorState(
       this._nodeMap,
       selection === undefined ? this._selection : selection,
+      this._slotsUsed,
     );
     editorState._readOnly = true;
+    // A clone describes the same content as this state, so it is still
+    // "parsed without running transforms" if this one was. Dropping the flag
+    // made `setEditorState(parsedState.clone(null))` — the documented way to
+    // apply a state without focusing the editor — skip the dirty-marking that
+    // lets transforms and hydrate-time normalization run.
+    editorState._parsed = this._parsed;
 
     return editorState;
   }
-  toJSON(): SerializedEditorState {
-    return readEditorState(null, this, () => ({
-      root: exportNodeToJSON($getRoot()),
-    }));
+  /**
+   * This document's JSON, in the legacy form that writes every property.
+   *
+   * The form is this call's to state, never inherited: called with no argument
+   * — including by `JSON.stringify`, for which this is the `toJSON` hook — it
+   * writes the legacy form whatever {@link $withCompactExport} encloses it.
+   * That is what makes this signature true, and it is the behavior that
+   * predates the compact form.
+   *
+   * A nested editor still follows the document containing it, because
+   * {@link LexicalEditor.toJSON} passes the enclosing form on explicitly
+   * rather than leaving it to be picked up here.
+   */
+  toJSON(compact?: false): SerializedEditorState;
+  /**
+   * @param compact Write the compact form, which omits from every node the
+   *   properties parsing restores on its own. Passing the form here rather
+   *   than through an enclosing {@link $withCompactExport} is what lets the
+   *   return type say which shape it is.
+   */
+  toJSON(compact: boolean): CompactSerializedEditorState;
+  toJSON(compact?: unknown): CompactSerializedEditorState {
+    // `typeof compact === 'boolean'`, not a truthy test, because
+    // `JSON.stringify` invokes this hook with the *property name* the value is
+    // under: `''` at the top level, but `'state'` for
+    // `JSON.stringify({state: editorState})`. A truthy check would silently
+    // write the compact form for the latter. Anything that is not a stated
+    // form is the legacy one, which is what both overloads promise.
+    return $withCompactExport(typeof compact === 'boolean' && compact, () =>
+      readEditorState(null, this, () => ({
+        root: $exportNodeToJSON($getRoot()) as SerializedRootNode,
+      })),
+    );
   }
 }

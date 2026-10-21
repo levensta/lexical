@@ -6,41 +6,76 @@
  *
  */
 
-import type {DOMConversionMap, NodeKey} from '../LexicalNode';
+import type {EditorConfig} from '../LexicalEditor';
+import type {LexicalNode, NodeKey} from '../LexicalNode';
 
-import devInvariant from 'shared/devInvariant';
-import invariant from 'shared/invariant';
+import invariant from '@lexical/internal/invariant';
 
 import {IS_UNMERGEABLE} from '../LexicalConstants';
-import {EditorConfig} from '../LexicalEditor';
-import {LexicalNode} from '../LexicalNode';
+import {GENERATED_TAB} from '../LexicalGeneratedJSON';
+import {
+  enumValue,
+  nodeSchema,
+  numberValue,
+  stringValue,
+  withAccessors,
+} from '../LexicalSchema';
 import {$applyNodeReplacement, getCachedClassNameArray} from '../LexicalUtils';
 import {
-  SerializedTextNode,
-  TextDetailType,
-  TextModeType,
+  type SerializedTextNode,
+  type TextDetailType,
+  type TextModeType,
   TextNode,
 } from './LexicalTextNode';
 
 export type SerializedTabNode = SerializedTextNode;
 
+// A tab's content, detail and mode are fixed rather than stored:
+// setTextContent normalizes any input to '\t', and setDetail/setMode reject
+// anything but IS_UNMERGEABLE/'normal'. They are therefore derived on import —
+// declaring that (rather than relying on defaults) both keeps a hand-authored
+// or foreign `{detail: 0}` / `{mode: 'token'}` from reaching a setter that
+// throws, and lets the compact form omit them.
+const tabNodeSchema = nodeSchema<TabNode>()({
+  // Read straight off the inherited fields — mode through the `getterTable`,
+  // since it is stored as a bitmask. All three are export-only: the values are
+  // fixed for a tab, so they are derived on import rather than applied.
+  detail: withAccessors(numberValue(IS_UNMERGEABLE), {
+    getter: {field: '__detail'},
+    setter: null,
+  }),
+  mode: withAccessors(enumValue(['normal']), {
+    getter: {
+      field: '__mode',
+      // Only the mode a tab can hold, rather than TextNode's whole table: that
+      // one also maps the token and segmented bits, which this schema does not
+      // serialize, and a `getterTable`'s values are held to the schema's domain.
+      getterTable: {0: 'normal'},
+    },
+    setter: null,
+  }),
+  text: withAccessors(stringValue('\t'), {
+    getter: {field: '__text', method: 'getTextContent'},
+    setter: null,
+  }),
+});
+
 /** @noInheritDoc */
 export class TabNode extends TextNode {
-  static getType(): string {
-    return 'tab';
+  $config() {
+    return this.config('tab', {
+      extends: TextNode,
+      generated: GENERATED_TAB,
+      json: tabNodeSchema,
+    });
   }
 
-  static clone(node: TabNode): TabNode {
-    return new TabNode(node.__key);
-  }
-
-  constructor(key?: NodeKey) {
+  // `key` carries an explicit `undefined` default (rather than the usual `?`)
+  // so the constructor reports zero required arguments, which lets `$config`
+  // synthesize the static `clone` by invoking the no-argument constructor.
+  constructor(key: NodeKey | undefined = undefined) {
     super('\t', key);
     this.__detail = IS_UNMERGEABLE;
-  }
-
-  static importDOM(): DOMConversionMap | null {
-    return null;
   }
 
   createDOM(config: EditorConfig): HTMLElement {
@@ -54,15 +89,18 @@ export class TabNode extends TextNode {
     return dom;
   }
 
-  static importJSON(serializedTabNode: SerializedTabNode): TabNode {
-    return $createTabNode().updateFromJSON(serializedTabNode);
-  }
-
-  setTextContent(text: string): this {
-    devInvariant(
-      text === '\t' || text === '',
-      'TabNode does not support setTextContent',
-    );
+  /**
+   * Always normalizes the stored content to `'\t'` regardless of input — see
+   * comment below for the rationale.
+   */
+  setTextContent(_text: string): this {
+    // The stored content is canonical regardless of input. Safari's
+    // MutationObserver can deliver mid-IME-composition writes onto the
+    // TabNode's `\t` text node (verified with Korean), and `flushMutations`
+    // then calls this with the in-flight composition payload; throwing here
+    // cascaded through `onError` and froze the editor (#8596). The dropped
+    // check was guarding caller assumptions, not stored state — the
+    // reconciler renders the canonical content on the next update.
     return super.setTextContent('\t');
   }
 
@@ -99,10 +137,12 @@ export class TabNode extends TextNode {
   }
 }
 
+/** Creates a TabNode representing a horizontal tab character. */
 export function $createTabNode(): TabNode {
   return $applyNodeReplacement(new TabNode());
 }
 
+/** Returns true if the given node is a TabNode. */
 export function $isTabNode(
   node: LexicalNode | null | undefined,
 ): node is TabNode {

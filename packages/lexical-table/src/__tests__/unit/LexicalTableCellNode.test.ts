@@ -10,11 +10,13 @@ import {$generateHtmlFromNodes, $generateNodesFromDOM} from '@lexical/html';
 import {
   $createTableCellNode,
   $isTableCellNode,
+  type SerializedTableCellNode,
   TableCellHeaderStates,
   TableCellNode,
 } from '@lexical/table';
-import {$createTextNode, $getRoot, DOMConversionOutput} from 'lexical';
+import {$createTextNode, $getRoot, type DOMConversionOutput} from 'lexical';
 import {
+  $runDOMConversion,
   expectHtmlToBeEqual,
   html,
   initializeUnitTest,
@@ -31,6 +33,61 @@ const editorConfig = Object.freeze({
 
 describe('LexicalTableCellNode tests', () => {
   initializeUnitTest(testEnv => {
+    test('importJSON coerces out-of-domain span/width/verticalAlign', async () => {
+      const {editor} = testEnv;
+
+      await editor.update(() => {
+        // Everything a TableCellNode adds over an element, out of domain: the
+        // serialization schema replaced the historical `|| 1` / `|| undefined`
+        // parsing, so these fall back rather than being stored verbatim.
+        // Cast: these are values a legacy or hostile document can carry, not
+        // values the node's own type admits.
+        const json = {
+          colSpan: 0,
+          headerState: TableCellHeaderStates.NO_STATUS,
+          rowSpan: -3,
+          type: 'tablecell',
+          verticalAlign: 'nonsense',
+          width: 0,
+        } as SerializedTableCellNode;
+        const cell = TableCellNode.importJSON(json);
+        invariant($isTableCellNode(cell), 'expected a TableCellNode');
+        expect(cell.getColSpan()).toBe(1);
+        expect(cell.getRowSpan()).toBe(1);
+        expect(cell.getWidth()).toBeUndefined();
+        expect(cell.getVerticalAlign()).toBeUndefined();
+      });
+    });
+
+    test('importJSON round-trips in-domain values', async () => {
+      const {editor} = testEnv;
+
+      await editor.update(() => {
+        const json: SerializedTableCellNode = {
+          backgroundColor: '#fff',
+          children: [],
+          colSpan: 2,
+          direction: null,
+          format: '',
+          headerState: TableCellHeaderStates.ROW,
+          indent: 0,
+          rowSpan: 3,
+          type: 'tablecell',
+          version: 1,
+          verticalAlign: 'middle',
+          width: 120,
+        };
+        const cell = TableCellNode.importJSON(json);
+        invariant($isTableCellNode(cell), 'expected a TableCellNode');
+        expect(cell.getColSpan()).toBe(2);
+        expect(cell.getRowSpan()).toBe(3);
+        expect(cell.getWidth()).toBe(120);
+        expect(cell.getVerticalAlign()).toBe('middle');
+        expect(cell.getBackgroundColor()).toBe('#fff');
+        expect(cell.getHeaderStyles()).toBe(TableCellHeaderStates.ROW);
+      });
+    });
+
     test('TableCellNode.constructor', async () => {
       const {editor} = testEnv;
 
@@ -104,7 +161,7 @@ describe('LexicalTableCellNode tests', () => {
       const {editor} = testEnv;
       const parser = new DOMParser();
 
-      const cases: Array<[string, string]> = [
+      const cases: [string, string][] = [
         [
           html`
             <table>
@@ -118,7 +175,6 @@ describe('LexicalTableCellNode tests', () => {
           `,
           html`
             <table>
-              <colgroup><col /></colgroup>
               <tbody>
                 <tr>
                   <td
@@ -150,7 +206,6 @@ describe('LexicalTableCellNode tests', () => {
           `,
           html`
             <table>
-              <colgroup><col /></colgroup>
               <tbody>
                 <tr>
                   <td
@@ -183,7 +238,6 @@ describe('LexicalTableCellNode tests', () => {
           `,
           html`
             <table>
-              <colgroup><col /></colgroup>
               <tbody>
                 <tr>
                   <td
@@ -220,22 +274,14 @@ describe('LexicalTableCellNode tests', () => {
       });
     }, 15000);
 
-    // Simulates the Lexical Paste Engine finding and running the converter
-    const convertHTMLTag = (element: HTMLElement) => {
-      const importDOMMap = TableCellNode.importDOM();
-
-      // look up tag name (e.g., 'th') in the import map
-      const handler = importDOMMap![element.tagName.toLowerCase()];
-      if (!handler) {
-        throw new Error(`No handler found for tag ${element.tagName}`);
-      }
-
-      const specs = handler(element);
-      if (!specs) {
-        throw new Error(`Handler returned null for tag ${element.tagName}`);
-      }
-      return specs.conversion(element);
-    };
+    // Simulates the Lexical Paste Engine finding and running the converter by
+    // driving the real DOM-import machinery (the editor's registered conversion
+    // cache, the path the paste engine actually uses) rather than reaching into
+    // TableCellNode.importDOM() directly. The element is converted in place so
+    // the cell's row/table position is visible to the conversion.
+    const $convertHTMLTag = (
+      element: HTMLElement,
+    ): DOMConversionOutput | null => $runDOMConversion(testEnv.editor, element);
 
     const expectTableCellNode = (result: DOMConversionOutput | null) => {
       const node = result?.node;
@@ -259,7 +305,7 @@ describe('LexicalTableCellNode tests', () => {
         const th = document.createElement('th');
         th.setAttribute('scope', 'col');
 
-        const result = convertHTMLTag(th);
+        const result = $convertHTMLTag(th);
 
         const node = expectTableCellNode(result);
 
@@ -274,7 +320,7 @@ describe('LexicalTableCellNode tests', () => {
         const th = document.createElement('th');
         th.setAttribute('scope', 'row');
 
-        const result = convertHTMLTag(th);
+        const result = $convertHTMLTag(th);
 
         const node = expectTableCellNode(result);
 
@@ -292,7 +338,7 @@ describe('LexicalTableCellNode tests', () => {
         tr.appendChild(th);
         table.appendChild(tr);
 
-        const result = convertHTMLTag(th);
+        const result = $convertHTMLTag(th);
 
         const node = expectTableCellNode(result);
 
@@ -313,7 +359,7 @@ describe('LexicalTableCellNode tests', () => {
         tr.appendChild(td);
         table.appendChild(tr);
 
-        const result = convertHTMLTag(th);
+        const result = $convertHTMLTag(th);
         const node = expectTableCellNode(result);
 
         // First row, first column → BOTH
@@ -339,7 +385,7 @@ describe('LexicalTableCellNode tests', () => {
         table.appendChild(tr1);
         table.appendChild(tr2);
 
-        const result = convertHTMLTag(th2);
+        const result = $convertHTMLTag(th2);
         const node = expectTableCellNode(result);
 
         // Non-first row, first column → COLUMN
@@ -362,7 +408,7 @@ describe('LexicalTableCellNode tests', () => {
         table.appendChild(thead);
 
         // Second th in thead → ROW (not first column, so only ROW from first row)
-        const result = convertHTMLTag(th2);
+        const result = $convertHTMLTag(th2);
         const node = expectTableCellNode(result);
 
         expect(node.getHeaderStyles()).toBe(TableCellHeaderStates.ROW);
@@ -376,7 +422,7 @@ describe('LexicalTableCellNode tests', () => {
         const td = document.createElement('td');
         td.style.backgroundColor = '#F4B084';
 
-        const result = convertHTMLTag(td);
+        const result = $convertHTMLTag(td);
         const node = expectTableCellNode(result);
 
         // Browsers normalize hex to rgb when set via .style
@@ -390,7 +436,7 @@ describe('LexicalTableCellNode tests', () => {
       await editor.update(() => {
         const td = document.createElement('td');
 
-        const result = convertHTMLTag(td);
+        const result = $convertHTMLTag(td);
         const node = expectTableCellNode(result);
 
         expect(node.getBackgroundColor()).toBeNull();
@@ -404,7 +450,7 @@ describe('LexicalTableCellNode tests', () => {
         const td = document.createElement('td');
         td.style.color = 'blue';
 
-        const result = convertHTMLTag(td);
+        const result = $convertHTMLTag(td);
         expectTableCellNode(result);
 
         // The after callback propagates td color to child TextNodes
@@ -421,7 +467,7 @@ describe('LexicalTableCellNode tests', () => {
         const td = document.createElement('td');
         td.style.color = 'blue';
 
-        const result = convertHTMLTag(td);
+        const result = $convertHTMLTag(td);
         expectTableCellNode(result);
 
         const textNode = $createTextNode('Hello');

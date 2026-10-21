@@ -8,14 +8,24 @@
 
 import type {LexicalCommandLog} from './useLexicalCommandsLog';
 import type {EditorSetOptions, EditorState} from 'lexical';
-import type {JSX} from 'react';
 
 import * as React from 'react';
-import {forwardRef, useCallback, useEffect, useRef, useState} from 'react';
+import {
+  forwardRef,
+  type JSX,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 const LARGE_EDITOR_STATE_SIZE = 1000;
 
-export const TreeView = forwardRef<
+// Annotated by hand: React's forwardRef is not a Lexical factory, so the build
+// does not annotate it, and an unannotated module-scope call is a side effect
+// to a bundler — one that pins this module, and everything it references, into
+// every bundle that imports @lexical/devtools-core.
+export const TreeView = /* @__PURE__ */ forwardRef<
   HTMLPreElement,
   {
     editorState: EditorState;
@@ -47,7 +57,7 @@ export const TreeView = forwardRef<
   ref,
 ): JSX.Element {
   const [timeStampedEditorStates, setTimeStampedEditorStates] = useState<
-    Array<[number, EditorState]>
+    [number, EditorState][]
   >([]);
   const [content, setContent] = useState<string>('');
   const [timeTravelEnabled, setTimeTravelEnabled] = useState(false);

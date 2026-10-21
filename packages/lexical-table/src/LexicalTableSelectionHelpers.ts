@@ -6,50 +6,25 @@
  *
  */
 
-import type {TableCellNode} from './LexicalTableCellNode';
-import type {
-  TableDOMCell,
-  TableDOMRows,
-  TableObservers,
-} from './LexicalTableObserver';
-import type {
-  TableMapType,
-  TableMapValueType,
-  TableSelection,
-} from './LexicalTableSelection';
-import type {
-  BaseSelection,
-  CaretDirection,
-  ChildCaret,
-  EditorState,
-  ElementNode,
-  LexicalCommand,
-  LexicalEditor,
-  LexicalNode,
-  PointCaret,
-  RangeSelection,
-  SiblingCaret,
-} from 'lexical';
-
 import {
   $getClipboardDataFromSelection,
   copyToClipboard,
 } from '@lexical/clipboard';
-import {
-  $findMatchingParent,
-  addClassNamesToElement,
-  objectKlassEquals,
-  removeClassNamesFromElement,
-} from '@lexical/utils';
+import invariant from '@lexical/internal/invariant';
+import {objectKlassEquals} from '@lexical/utils';
 import {
   $caretFromPoint,
+  $comparePointCaretNext,
   $createParagraphNode,
   $createRangeSelectionFromDom,
   $createTextNode,
   $extendCaretToRange,
+  $findMatchingParent,
   $getAdjacentChildCaret,
   $getChildCaret,
+  $getCommonAncestor,
   $getNearestNodeFromDOMNode,
+  $getNodeByKey,
   $getNodeByKeyOrThrow,
   $getPreviousSelection,
   $getSelection,
@@ -64,18 +39,32 @@ import {
   $normalizeCaret,
   $setPointFromCaret,
   $setSelection,
+  addClassNamesToElement,
+  type BaseSelection,
+  type CaretDirection,
+  type ChildCaret,
   COMMAND_PRIORITY_HIGH,
   CONTROLLED_TEXT_INSERTION_COMMAND,
+  COPY_COMMAND,
   CUT_COMMAND,
   DELETE_CHARACTER_COMMAND,
   DELETE_LINE_COMMAND,
   DELETE_WORD_COMMAND,
+  type EditorState,
+  type ElementNode,
   FOCUS_COMMAND,
   FORMAT_ELEMENT_COMMAND,
   FORMAT_TEXT_COMMAND,
+  getActiveElement,
+  getComposedEventTarget,
   getDOMSelection,
+  getDOMSelectionPoints,
+  getDOMSelectionRange,
   INSERT_PARAGRAPH_COMMAND,
+  IS_FIREFOX,
+  isDOMDocumentNode,
   isDOMNode,
+  isDOMShadowRoot,
   isHTMLElement,
   KEY_ARROW_DOWN_COMMAND,
   KEY_ARROW_LEFT_COMMAND,
@@ -85,34 +74,116 @@ import {
   KEY_DELETE_COMMAND,
   KEY_ESCAPE_COMMAND,
   KEY_TAB_COMMAND,
+  type LexicalEditor,
+  type LexicalNode,
+  mergeRegister,
+  type NodeKey,
+  PASTE_COMMAND,
+  type PointCaret,
+  type RangeSelection,
+  registerEventListener,
+  registerEventListeners,
+  removeClassNamesFromElement,
   SELECTION_CHANGE_COMMAND,
+  type SiblingCaret,
 } from 'lexical';
-import {IS_FIREFOX} from 'shared/environment';
-import invariant from 'shared/invariant';
 
-import {$isTableCellNode} from './LexicalTableCellNode';
+import {$isTableCellNode, type TableCellNode} from './LexicalTableCellNode';
 import {
   $getElementForTableNode,
   $isScrollableTablesActive,
   $isTableNode,
-  TableNode,
+  type TableNode,
 } from './LexicalTableNode';
-import {TableDOMTable, TableObserver} from './LexicalTableObserver';
+import {
+  type TableDOMCell,
+  type TableDOMRows,
+  type TableDOMTable,
+  TableObserver,
+  type TableObservers,
+} from './LexicalTableObserver';
 import {$isTableRowNode} from './LexicalTableRowNode';
-import {$isTableSelection} from './LexicalTableSelection';
+import {
+  $createTableSelectionFrom,
+  $isTableSelection,
+  type TableMapType,
+  type TableMapValueType,
+  type TableSelection,
+} from './LexicalTableSelection';
 import {
   $computeTableCellRectBoundary,
   $computeTableCellRectSpans,
   $computeTableMap,
   $getNodeTriplet,
-  TableCellRectBoundary,
+  type TableCellRectBoundary,
 } from './LexicalTableUtils';
 
 const LEXICAL_ELEMENT_KEY = '__lexicalTableSelection';
 
+function $getTableNodeByKeyOrThrow(key: NodeKey): TableNode {
+  const tableNode = $getNodeByKeyOrThrow(key);
+  invariant($isTableNode(tableNode), 'Expected TableNode for key %s', key);
+  return tableNode;
+}
+
 const isPointerDownOnEvent = (event: PointerEvent) => {
   return (event.buttons & 1) === 1;
 };
+
+// How far (in CSS pixels) a pointer may travel from where it went down and
+// still count as a tap rather than a drag. Touch contacts jitter by a few
+// pixels while the finger is lifted, so a tap that lands near a cell border
+// is otherwise reported as a move into the neighbouring cell (#8538).
+const TAP_SLOP = 10;
+
+// Distance (px) from a scroll container edge at which drag auto-scroll kicks
+// in, and the maximum scroll delta applied per frame at AUTO_SCROLL_FPS.
+const AUTO_SCROLL_EDGE_ZONE = 40;
+const AUTO_SCROLL_MAX_STEP = 18;
+// Each tick scales the per-frame deltas by the time since the previous one
+// (at most AUTO_SCROLL_MAX_ELAPSED_MS), so the scroll speed doesn't follow
+// the frame rate.
+const AUTO_SCROLL_FPS = 60;
+const AUTO_SCROLL_MAX_ELAPSED_MS = 100;
+
+// Given a pointer position and the start/end edges of a scroll container on one
+// axis, return the signed scroll delta for a tick covering `elapsed` ms (a
+// frame by default): negative near the start edge, positive near the end edge,
+// 0 while outside both edge zones. The per-frame delta ramps up the deeper the
+// pointer is into the zone (and is capped once it reaches or passes the edge).
+// The magnitude is scaled before the sign is applied, since Math.round rounds
+// halves up and would favour positive steps, and stays at least one pixel: the
+// loop stops on a tick that scrolls nothing.
+function autoScrollStep(
+  pos: number,
+  start: number,
+  end: number,
+  elapsed = 1000 / AUTO_SCROLL_FPS,
+): number {
+  const speed = (depth: number) =>
+    Math.max(
+      1,
+      Math.round(
+        (Math.max(
+          1,
+          Math.ceil(
+            (Math.min(AUTO_SCROLL_EDGE_ZONE, depth) / AUTO_SCROLL_EDGE_ZONE) *
+              AUTO_SCROLL_MAX_STEP,
+          ),
+        ) *
+          elapsed *
+          AUTO_SCROLL_FPS) /
+          1000,
+      ),
+    );
+  if (pos <= start + AUTO_SCROLL_EDGE_ZONE) {
+    return -speed(start + AUTO_SCROLL_EDGE_ZONE - pos);
+  }
+  if (pos >= end - AUTO_SCROLL_EDGE_ZONE) {
+    return speed(pos - (end - AUTO_SCROLL_EDGE_ZONE));
+  }
+  return 0;
+}
 
 export function isHTMLTableElement(el: unknown): el is HTMLTableElement {
   return isHTMLElement(el) && el.nodeName === 'TABLE';
@@ -180,52 +251,81 @@ export function registerTableWindowHandlers(
   editor: LexicalEditor,
   tableObservers: TableObservers,
 ) {
-  const rootElement = editor.getRootElement();
-  const editorWindow = editor._window;
-  if (!rootElement || !editorWindow) {
-    return () => {};
-  }
-
-  const pointerDownCallback = (event: PointerEvent) => {
-    const target = event.target;
-    if (
-      event.button !== 0 ||
-      !isDOMNode(target) ||
-      !rootElement.contains(target)
-    ) {
+  // Use registerRootListener so the pointerdown handler is (re)attached
+  // whenever the root element is set. This is required for the Extension API,
+  // where register() runs before the ContentEditable mounts and getRootElement()
+  // is still null.
+  return editor.registerRootListener(rootElement => {
+    if (rootElement === null) {
       return;
     }
-    const selectionInfo = getTableObserverFromCellNode(target);
+    const editorWindow = editor._window;
+    if (editorWindow === null) {
+      return;
+    }
 
-    editor.update(() => {
-      // Clear highlights from all tables (even one we're actively clicking on)
-      const selection = $getSelection();
-      if ($isTableSelection(selection)) {
-        for (const [observer] of tableObservers.observers.values()) {
-          observer.$clearHighlight(false);
-        }
-        $setSelection(null);
-        editor.dispatchCommand(SELECTION_CHANGE_COMMAND, undefined);
-      }
-      if (!selectionInfo) {
+    const pointerDownCallback = (event: PointerEvent) => {
+      tableObservers.touchTapCellKey = null;
+      // Listener is on editorWindow; the composed target is needed so the
+      // rootElement.contains check below sees the shadow-internal target.
+      const target = getComposedEventTarget(event);
+      if (
+        event.button !== 0 ||
+        !isDOMNode(target) ||
+        !rootElement.contains(target)
+      ) {
         return;
       }
-      const {tableObserver, tableElement, cellElement} = selectionInfo;
-      $handleTableClick(
-        editor,
-        event,
-        cellElement,
-        tableElement,
-        tableObserver,
-        tableObservers,
-      );
-    });
-  };
+      // The nearest table can belong to another editor: a nested editor's
+      // table inside this root, or the parent's table around a nested root.
+      // Its node is not in this editor's node map, so leave it to the editor
+      // that owns it. The highlight below is still cleared.
+      const cellInfo = getTableObserverFromCellNode(target);
+      const selectionInfo =
+        cellInfo !== null && cellInfo.tableObserver.editor === editor
+          ? cellInfo
+          : null;
 
-  editorWindow.addEventListener('pointerdown', pointerDownCallback);
-  return () => {
-    editorWindow.removeEventListener('pointerdown', pointerDownCallback);
-  };
+      editor.update(() => {
+        // Clear highlights from all tables (even one we're actively clicking on)
+        const selection = $getSelection();
+        if ($isTableSelection(selection)) {
+          for (const [observer] of tableObservers.observers.values()) {
+            observer.$clearHighlight(false);
+          }
+          $setSelection(null);
+          editor.dispatchCommand(SELECTION_CHANGE_COMMAND);
+        }
+        if (!selectionInfo) {
+          return;
+        }
+        const {tableObserver, tableElement, cellElement} = selectionInfo;
+        $handleTableClick(
+          editor,
+          event,
+          cellElement,
+          tableElement,
+          tableObserver,
+          tableObservers,
+        );
+      });
+    };
+
+    const clearTouchTap = () => {
+      tableObservers.touchTapCellKey = null;
+    };
+    return mergeRegister(
+      registerEventListener(editorWindow, 'pointerdown', pointerDownCallback),
+      // Clear before a key handler can extend the selection, including when
+      // that handler stops propagation. A later keyboard selection is not a tap.
+      registerEventListeners(
+        editorWindow,
+        {blur: clearTouchTap, keydown: clearTouchTap},
+        {capture: true},
+      ),
+      clearTouchTap,
+    );
+  });
 }
 
 function $handleTableClick(
@@ -240,96 +340,401 @@ function $handleTableClick(
   if (!editorWindow) {
     return;
   }
-  const createPointerHandlers = (startingCell: TableDOMCell | null) => {
+  const createPointerHandlers = (startingCell: TableDOMCell) => {
     if (tableObserver.isSelecting) {
       return;
     }
     tableObserver.isSelecting = true;
+    tableObserver.isPointerDrag = false;
+    tableObserver.pointerStartCell = startingCell;
 
-    // Set anchor immediately if starting cell provided (handles direct drag without click)
-    if (startingCell !== null && tableObserver.anchorCell === null) {
+    const isTouch = event.pointerType === 'touch';
+    // The pointer that owns this gesture. Moves and lifts belonging to any
+    // other pointer — a second finger, a stylus resting on the screen — are a
+    // different gesture and must not drive this one.
+    const gesturePointerId = event.pointerId;
+    const startClientX = event.clientX;
+    const startClientY = event.clientY;
+
+    // Whether this gesture has established its own anchor cell. Non-touch
+    // gestures anchor at pointerdown, so they start out anchored. A touch tap
+    // must not enter table selection mode, so on touch the anchor is deferred
+    // until the gesture becomes a drag that crosses into another cell:
+    // anchoring eagerly leaves state behind that turns the next tap into a
+    // table selection (#8538).
+    let hasAnchorForGesture = !isTouch;
+
+    // Set the anchor immediately so a drag that never gets a click still has
+    // one (handles direct drag without click).
+    if (!isTouch && tableObserver.anchorCell === null) {
       editor.update(() => {
         tableObserver.$setAnchorCellForSelection(startingCell);
       });
     }
 
-    const onPointerUp = () => {
+    let lastClientX = event.clientX;
+    let lastClientY = event.clientY;
+    let autoScrollRafId: number | null = null;
+    // The previous tick of the running auto-scroll. Starting a run sets it to
+    // Infinity, which no tick comes after.
+    let lastAutoScrollTime: number;
+    // Removes every listener below. Assigned once they are defined; nothing
+    // can call stopSelecting before then, since only those listeners do.
+    let removeGestureListeners: (() => void) | null = null;
+
+    // Events from other pointers belong to other gestures. Environments that
+    // synthesise PointerEvents without a pointerId leave both sides undefined,
+    // which matches, so nothing is filtered out there.
+    const isGesturePointer = (pointerEvent: PointerEvent): boolean =>
+      pointerEvent.pointerId === gesturePointerId;
+
+    // Whether the pointer has travelled beyond the tap slop box. Written so
+    // that non-finite coordinates (again, synthesised events) fall through as
+    // "moved": slop can't be measured there, and the cell-crossing check in
+    // applyFocusCell still applies.
+    const isBeyondTapSlop = (clientX: number, clientY: number): boolean =>
+      !(
+        Math.abs(clientX - startClientX) <= TAP_SLOP &&
+        Math.abs(clientY - startClientY) <= TAP_SLOP
+      );
+
+    const stopSelecting = () => {
       tableObserver.isSelecting = false;
-      editorWindow.removeEventListener('pointerup', onPointerUp);
-      editorWindow.removeEventListener('pointermove', onPointerMove);
+      tableObserver.isPointerDrag = false;
+      tableObserver.pointerStartCell = null;
+      if (autoScrollRafId !== null) {
+        editorWindow.cancelAnimationFrame(autoScrollRafId);
+        autoScrollRafId = null;
+      }
+      if (removeGestureListeners !== null) {
+        removeGestureListeners();
+        removeGestureListeners = null;
+      }
+    };
+
+    // Resolve the table cell under the given viewport coordinates via the
+    // table's own root so elementsFromPoint isn't retargeted; narrow with the
+    // type guards rather than casting so the detached-table case (Node) falls
+    // through to no hit-test.
+    const resolveFocusCellFromPoint = (
+      clientX: number,
+      clientY: number,
+    ): TableDOMCell | null => {
+      const tableRoot = tableElement.getRootNode();
+      if (!isDOMDocumentNode(tableRoot) && !isDOMShadowRoot(tableRoot)) {
+        return null;
+      }
+      for (const el of tableRoot.elementsFromPoint(clientX, clientY)) {
+        const cell = getDOMCellInTableFromTarget(tableElement, el);
+        if (cell) {
+          return cell;
+        }
+      }
+      return null;
+    };
+
+    const applyFocusCell = (focusCell: TableDOMCell, override: boolean) => {
+      // A deferred (touch) gesture only starts a table selection once it is a
+      // drag that has left the cell it started in. Taps jitter, so neither a
+      // move within the slop box nor a hit-test landing back in the starting
+      // cell is enough to commit to one (#8538).
+      if (
+        !hasAnchorForGesture &&
+        (!tableObserver.isPointerDrag || focusCell.elem === startingCell.elem)
+      ) {
+        return;
+      }
+      // Fallback: set anchor if still missing (handles race conditions), or
+      // adopt the cell the gesture started on now that a deferred gesture has
+      // become a drag, so the selection covers where the drag began rather
+      // than whatever anchor an earlier gesture left behind.
+      if (tableObserver.anchorCell === null || !hasAnchorForGesture) {
+        const anchorCell = hasAnchorForGesture ? focusCell : startingCell;
+        editor.update(() => {
+          tableObserver.$setAnchorCellForSelection(anchorCell);
+        });
+      }
+      hasAnchorForGesture = true;
+      if (
+        tableObserver.focusCell === null ||
+        focusCell.elem !== tableObserver.focusCell.elem
+      ) {
+        tableObservers.setNextFocus({
+          focusCell,
+          override,
+          tableKey: tableObserver.tableNodeKey,
+        });
+        editor.dispatchCommand(SELECTION_CHANGE_COMMAND);
+      }
+    };
+
+    // Walk up from the table to the nearest ancestor that can actually scroll
+    // on the requested axis (the scrollable-tables wrapper for 'x'). Returns
+    // null when none is found, in which case the caller may fall back to the
+    // window.
+    const findScrollContainer = (axis: 'x' | 'y'): HTMLElement | null => {
+      for (
+        let el: HTMLElement | null = tableElement.parentElement;
+        el;
+        el = el.parentElement
+      ) {
+        const canScroll =
+          axis === 'x'
+            ? el.scrollWidth > el.clientWidth
+            : el.scrollHeight > el.clientHeight;
+        if (canScroll) {
+          const style = editorWindow.getComputedStyle(el);
+          const overflow = axis === 'x' ? style.overflowX : style.overflowY;
+          if (overflow === 'auto' || overflow === 'scroll') {
+            return el;
+          }
+        }
+      }
+      return null;
+    };
+
+    // Scroll `container` (or the window when null) on `axis` if the pointer is
+    // within the edge zone, by as much as `elapsed` ms of auto-scroll covers.
+    // Returns whether it actually scrolled.
+    const scrollAxis = (
+      container: HTMLElement | null,
+      pos: number,
+      axis: 'x' | 'y',
+      elapsed: number,
+    ): boolean => {
+      let start: number;
+      let end: number;
+      if (container === null) {
+        start = 0;
+        end = axis === 'x' ? editorWindow.innerWidth : editorWindow.innerHeight;
+      } else {
+        const rect = container.getBoundingClientRect();
+        start = axis === 'x' ? rect.left : rect.top;
+        end = axis === 'x' ? rect.right : rect.bottom;
+      }
+      const step = autoScrollStep(pos, start, end, elapsed);
+      if (step === 0) {
+        return false;
+      }
+      if (container === null) {
+        const before =
+          axis === 'x' ? editorWindow.scrollX : editorWindow.scrollY;
+        editorWindow.scrollBy(axis === 'x' ? step : 0, axis === 'x' ? 0 : step);
+        return (
+          (axis === 'x' ? editorWindow.scrollX : editorWindow.scrollY) !==
+          before
+        );
+      }
+      if (axis === 'x') {
+        const before = container.scrollLeft;
+        container.scrollLeft += step;
+        return container.scrollLeft !== before;
+      }
+      const before = container.scrollTop;
+      container.scrollTop += step;
+      return container.scrollTop !== before;
+    };
+
+    // Clamp the last pointer position into the visible bounds of the scroll
+    // container(s) so a pointer dragged past an edge still hit-tests onto the
+    // newly-revealed cell instead of empty space beyond the table.
+    const clampHitPoint = (
+      hContainer: HTMLElement | null,
+      vContainer: HTMLElement | null,
+    ): [number, number] => {
+      let x = lastClientX;
+      let y = lastClientY;
+      if (hContainer === null) {
+        x = Math.min(Math.max(x, 1), editorWindow.innerWidth - 1);
+      } else {
+        const rect = hContainer.getBoundingClientRect();
+        x = Math.min(Math.max(x, rect.left + 1), rect.right - 1);
+      }
+      if (vContainer === null) {
+        y = Math.min(Math.max(y, 1), editorWindow.innerHeight - 1);
+      } else {
+        const rect = vContainer.getBoundingClientRect();
+        y = Math.min(Math.max(y, rect.top + 1), rect.bottom - 1);
+      }
+      return [x, y];
+    };
+
+    const isNearScrollEdge = (): boolean => {
+      const hContainer = findScrollContainer('x');
+      if (hContainer !== null) {
+        const rect = hContainer.getBoundingClientRect();
+        if (autoScrollStep(lastClientX, rect.left, rect.right) !== 0) {
+          return true;
+        }
+      }
+      const vContainer = findScrollContainer('y');
+      const vStart =
+        vContainer === null ? 0 : vContainer.getBoundingClientRect().top;
+      const vEnd =
+        vContainer === null
+          ? editorWindow.innerHeight
+          : vContainer.getBoundingClientRect().bottom;
+      return autoScrollStep(lastClientY, vStart, vEnd) !== 0;
+    };
+
+    const tickAutoScroll = (time: number) => {
+      autoScrollRafId = null;
+      if (!tableObserver.isSelecting) {
+        return;
+      }
+      // The first tick of a run covers a frame, as does one whose clock did
+      // not advance.
+      const elapsed =
+        time > lastAutoScrollTime
+          ? Math.min(time - lastAutoScrollTime, AUTO_SCROLL_MAX_ELAPSED_MS)
+          : 1000 / AUTO_SCROLL_FPS;
+      lastAutoScrollTime = time;
+      const hContainer = findScrollContainer('x');
+      const vContainer = findScrollContainer('y');
+      // Only the table's own wrapper scrolls horizontally; pages don't
+      // auto-scroll sideways. Vertically we fall back to the window.
+      const scrolledX =
+        hContainer !== null &&
+        scrollAxis(hContainer, lastClientX, 'x', elapsed);
+      const scrolledY = scrollAxis(vContainer, lastClientY, 'y', elapsed);
+      if (scrolledX || scrolledY) {
+        const [hitX, hitY] = clampHitPoint(hContainer, vContainer);
+        const focusCell = resolveFocusCellFromPoint(hitX, hitY);
+        if (focusCell) {
+          applyFocusCell(focusCell, false);
+        }
+        autoScrollRafId = editorWindow.requestAnimationFrame(tickAutoScroll);
+      }
+    };
+
+    const maybeStartAutoScroll = () => {
+      // Touch taps don't initiate table selection, so they shouldn't scroll.
+      // A touch drag that has become one still needs to reach the columns
+      // past the edge of a scrollable table, so gate on the tap, not on the
+      // pointer type.
+      if (
+        autoScrollRafId !== null ||
+        (isTouch && !tableObserver.isPointerDrag) ||
+        !isNearScrollEdge()
+      ) {
+        return;
+      }
+      lastAutoScrollTime = Infinity;
+      autoScrollRafId = editorWindow.requestAnimationFrame(tickAutoScroll);
+    };
+
+    const onPointerUp = (upEvent: PointerEvent) => {
+      if (isGesturePointer(upEvent)) {
+        if (isBeyondTapSlop(upEvent.clientX, upEvent.clientY)) {
+          tableObservers.touchTapCellKey = null;
+        }
+        stopSelecting();
+      }
+    };
+
+    // A gesture also ends when the browser takes it away: a touch that turns
+    // into a scroll fires pointercancel and never a pointerup, and pointer
+    // capture (implicit for touch) can be lost to another element. Without
+    // these the observer stays in selecting mode indefinitely — the stale
+    // pointermove listener keeps driving selections from this gesture's
+    // starting cell, and createPointerHandlers refuses to start any later
+    // gesture, so every subsequent tap selects cells (#8538).
+    const onPointerGestureEnd = (endEvent: PointerEvent) => {
+      if (isGesturePointer(endEvent)) {
+        tableObservers.touchTapCellKey = null;
+        stopSelecting();
+      }
     };
 
     const onPointerMove = (moveEvent: PointerEvent) => {
-      if (!isPointerDownOnEvent(moveEvent) && tableObserver.isSelecting) {
-        tableObserver.isSelecting = false;
-        editorWindow.removeEventListener('pointerup', onPointerUp);
-        editorWindow.removeEventListener('pointermove', onPointerMove);
+      if (!isGesturePointer(moveEvent)) {
         return;
       }
-      if (!isDOMNode(moveEvent.target)) {
+      if (!isPointerDownOnEvent(moveEvent) && tableObserver.isSelecting) {
+        tableObservers.touchTapCellKey = null;
+        stopSelecting();
         return;
+      }
+      const moveTarget = getComposedEventTarget(moveEvent);
+      if (!isDOMNode(moveTarget)) {
+        return;
+      }
+      lastClientX = moveEvent.clientX;
+      lastClientY = moveEvent.clientY;
+      if (
+        !tableObserver.isPointerDrag &&
+        isBeyondTapSlop(lastClientX, lastClientY)
+      ) {
+        tableObserver.isPointerDrag = true;
+        tableObservers.touchTapCellKey = null;
       }
       let focusCell: null | TableDOMCell = null;
       // In firefox the moveEvent.target may be captured so we must always
       // consult the coordinates #7245
-      const override = !(IS_FIREFOX || tableElement.contains(moveEvent.target));
+      const override = !(IS_FIREFOX || tableElement.contains(moveTarget));
       if (override) {
-        focusCell = getDOMCellInTableFromTarget(tableElement, moveEvent.target);
+        focusCell = getDOMCellInTableFromTarget(tableElement, moveTarget);
       } else {
-        for (const el of document.elementsFromPoint(
+        focusCell = resolveFocusCellFromPoint(
           moveEvent.clientX,
           moveEvent.clientY,
-        )) {
-          focusCell = getDOMCellInTableFromTarget(tableElement, el);
-          if (focusCell) {
-            break;
-          }
-        }
+        );
       }
       if (focusCell) {
-        const anchorCell = focusCell;
-        // Fallback: set anchor if still missing (handles race conditions)
-        if (tableObserver.anchorCell === null) {
-          editor.update(() => {
-            tableObserver.$setAnchorCellForSelection(anchorCell);
-          });
-        }
-        if (
-          tableObserver.focusCell === null ||
-          focusCell.elem !== tableObserver.focusCell.elem
-        ) {
-          tableObservers.setNextFocus({
-            focusCell,
-            override,
-            tableKey: tableObserver.tableNodeKey,
-          });
-          editor.dispatchCommand(SELECTION_CHANGE_COMMAND, undefined);
-        }
+        applyFocusCell(focusCell, override);
       }
+      // Keep the selection reachable when dragging toward/past an edge of a
+      // scrollable table (#7153).
+      maybeStartAutoScroll();
     };
-    editorWindow.addEventListener(
-      'pointerup',
-      onPointerUp,
-      tableObserver.listenerOptions,
-    );
-    editorWindow.addEventListener(
-      'pointermove',
-      onPointerMove,
+    removeGestureListeners = registerEventListeners(
+      editorWindow,
+      {
+        lostpointercapture: onPointerGestureEnd,
+        pointercancel: onPointerGestureEnd,
+        pointermove: onPointerMove,
+        pointerup: onPointerUp,
+      },
       tableObserver.listenerOptions,
     );
   };
 
   tableObserver.pointerType = event.pointerType;
-  const tableNode = $getNodeByKeyOrThrow<TableNode>(tableObserver.tableNodeKey);
+  if (
+    event.pointerType === 'touch' &&
+    !event.shiftKey &&
+    !tableObserver.isSelecting
+  ) {
+    const cellNode = $getNearestNodeFromDOMNode(selectedDOMCell.elem);
+    tableObservers.touchTapCellKey = cellNode ? cellNode.getKey() : null;
+  }
+  const tableNode = $getTableNodeByKeyOrThrow(tableObserver.tableNodeKey);
   const prevSelection = $getPreviousSelection();
   // We can't trust Firefox to do the right thing with the selection and
   // we don't have a proper state machine to do this "correctly" but
-  // if we go ahead and make the table selection now it will work
+  // if we go ahead and make the table selection now it will work.
+  //
+  // Only the nearest cell's observer is given the pointerdown
+  // (getTableObserverFromCellNode resolves one), so shift-clicking into a table
+  // nested inside a cell arrives here with `tableNode` set to that nested table
+  // and a previous anchor in the cell around it — outside `tableNode`, so
+  // $isSelectionInTable alone would skip it and leave the case to Firefox,
+  // which resets the anchor to the start of the cell. The branches below do
+  // resolve it, so widen to it and to nothing else: an anchor in an unrelated
+  // table is not something they can resolve, and the second one would put the
+  // focus on this table's edge rather than on the cell that was clicked.
+  const prevAnchorNestedCell =
+    $isRangeSelection(prevSelection) || $isTableSelection(prevSelection)
+      ? $findCellNode(prevSelection.anchor.getNode())
+      : null;
+  const isShiftClickIntoNestedTable =
+    prevAnchorNestedCell !== null && prevAnchorNestedCell.isParentOf(tableNode);
   if (
     IS_FIREFOX &&
     event.shiftKey &&
-    $isSelectionInTable(prevSelection, tableNode) &&
-    ($isRangeSelection(prevSelection) || $isTableSelection(prevSelection))
+    ($isRangeSelection(prevSelection) || $isTableSelection(prevSelection)) &&
+    ($isSelectionInTable(prevSelection, tableNode) ||
+      isShiftClickIntoNestedTable)
   ) {
     const prevAnchorNode = prevSelection.anchor.getNode();
     const prevAnchorCell = $findParentTableCellNodeInTable(
@@ -337,11 +742,30 @@ function $handleTableClick(
       prevSelection.anchor.getNode(),
     );
     if (prevAnchorCell) {
-      tableObserver.$setAnchorCellForSelection(
-        $getObserverCellFromCellNodeOrThrow(tableObserver, prevAnchorCell),
+      const prevAnchorDOMCell = $getObserverCellFromCellNodeOrThrow(
+        tableObserver,
+        prevAnchorCell,
       );
-      tableObserver.$setFocusCellForSelection(selectedDOMCell);
-      stopEvent(event);
+      // Only when the two ends are in different cells is there a table
+      // selection to make. A shift-click out of a nested table arrives here
+      // with both in the same one: the anchor sits inside that table, and
+      // $findParentTableCellNodeInTable walks past it to the cell of
+      // `tableNode` that contains it, which is also the cell that was clicked.
+      // Building a TableSelection from that covers the single cell end to end
+      // — "erroneously selects the entire outer cell". What belongs there is an
+      // ordinary range inside the cell, which the engine resolves on its own.
+      if (prevAnchorDOMCell.elem !== selectedDOMCell.elem) {
+        tableObserver.$setAnchorCellForSelection(prevAnchorDOMCell);
+        tableObserver.$setFocusCellForSelection(selectedDOMCell);
+        stopEvent(event);
+      } else if (event.pointerType !== 'touch') {
+        // No table selection to make, but the observer's anchor still has to
+        // follow the pointer down: createPointerHandlers only adopts its
+        // `startingCell` when `anchorCell` is null, so leaving a cell from an
+        // earlier click in place would anchor a drag started here on that one.
+        // This records the cell without touching the selection.
+        tableObserver.$setAnchorCellForSelection(selectedDOMCell);
+      }
     } else {
       const newSelection = tableNode.isBefore(prevAnchorNode)
         ? tableNode.selectStart()
@@ -351,6 +775,10 @@ function $handleTableClick(
         prevSelection.anchor.offset,
         prevSelection.anchor.type,
       );
+      // The selection above is the answer, so the native shift-click must not
+      // also run: Firefox would resolve its own, anchored at the start of the
+      // cell, and the selectionchange import would overwrite this one.
+      stopEvent(event);
     }
   } else {
     // Only set anchor cell for selection if this is not a simple touch tap
@@ -388,21 +816,22 @@ export function applyTableHandlers(
   );
 
   const onTripleClick = (event: MouseEvent) => {
-    if (event.detail >= 3 && isDOMNode(event.target)) {
-      const targetCell = getDOMCellFromTarget(event.target);
+    const target = getComposedEventTarget(event);
+    if (event.detail >= 3 && isDOMNode(target)) {
+      const targetCell = getDOMCellFromTarget(target);
       if (targetCell !== null) {
         event.preventDefault();
       }
     }
   };
-  tableElement.addEventListener(
-    'mousedown',
-    onTripleClick,
-    tableObserver.listenerOptions,
+  tableObserver.listenersToRemove.add(
+    registerEventListener(
+      tableElement,
+      'mousedown',
+      onTripleClick,
+      tableObserver.listenerOptions,
+    ),
   );
-  tableObserver.listenersToRemove.add(() => {
-    tableElement.removeEventListener('mousedown', onTripleClick);
-  });
 
   for (const [command, direction] of ARROW_KEY_COMMANDS_WITH_DIRECTION) {
     tableObserver.listenersToRemove.add(
@@ -445,7 +874,7 @@ export function applyTableHandlers(
     ),
   );
 
-  const deleteTextHandler = (command: LexicalCommand<boolean>) => () => {
+  const $deleteTextHandler = () => {
     const selection = $getSelection();
 
     if (!$isSelectionInTable(selection, tableNode)) {
@@ -456,56 +885,6 @@ export function applyTableHandlers(
       tableObserver.$clearText();
 
       return true;
-    } else if ($isRangeSelection(selection)) {
-      const tableCellNode = $findParentTableCellNodeInTable(
-        tableNode,
-        selection.anchor.getNode(),
-      );
-
-      if (!$isTableCellNode(tableCellNode)) {
-        return false;
-      }
-
-      const anchorNode = selection.anchor.getNode();
-      const focusNode = selection.focus.getNode();
-      const isAnchorInside = tableNode.isParentOf(anchorNode);
-      const isFocusInside = tableNode.isParentOf(focusNode);
-
-      const selectionContainsPartialTable =
-        (isAnchorInside && !isFocusInside) ||
-        (isFocusInside && !isAnchorInside);
-
-      if (selectionContainsPartialTable) {
-        tableObserver.$clearText();
-        return true;
-      }
-
-      const nearestElementNode = $findMatchingParent(
-        selection.anchor.getNode(),
-        n => $isElementNode(n),
-      );
-
-      const topLevelCellElementNode =
-        nearestElementNode &&
-        $findMatchingParent(
-          nearestElementNode,
-          n => $isElementNode(n) && $isTableCellNode(n.getParent()),
-        );
-
-      if (
-        !$isElementNode(topLevelCellElementNode) ||
-        !$isElementNode(nearestElementNode)
-      ) {
-        return false;
-      }
-
-      if (
-        command === DELETE_LINE_COMMAND &&
-        topLevelCellElementNode.getPreviousSibling() === null
-      ) {
-        // TODO: Fix Delete Line in Table Cells.
-        return true;
-      }
     }
 
     return false;
@@ -515,7 +894,7 @@ export function applyTableHandlers(
     tableObserver.listenersToRemove.add(
       editor.registerCommand(
         command,
-        deleteTextHandler(command),
+        $deleteTextHandler,
         COMMAND_PRIORITY_HIGH,
       ),
     );
@@ -608,6 +987,63 @@ export function applyTableHandlers(
     ),
   );
 
+  // When TableSelection clears native selection ranges (removeAllRanges),
+  // browsers redirect paste events to <body> instead of the rootElement.
+  // Intercept at the document level and forward to PASTE_COMMAND.
+  const doc = rootElement.ownerDocument;
+  tableObserver.listenersToRemove.add(
+    registerEventListener(doc, 'paste', (event: ClipboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      const shouldIntercept = editor.read('latest', () => {
+        const selection = $getSelection();
+        return (
+          rootElement.contains(doc.activeElement) &&
+          $isTableSelection(selection) &&
+          $isSelectionInTable(selection, tableNode)
+        );
+      });
+      if (shouldIntercept) {
+        event.preventDefault();
+        editor.dispatchCommand(PASTE_COMMAND, event);
+      }
+    }),
+  );
+
+  // In read-only mode (contentEditable=false), Firefox fires the native copy
+  // event on the document rather than on the root element, so the core
+  // PASS_THROUGH copy listener never sees it. We intercept at the document
+  // level and forward to COPY_COMMAND. Unlike the paste listener above, we
+  // skip events whose target is inside the rootElement — those are already
+  // handled by the core copy listener which runs regardless of isEditable.
+  tableObserver.listenersToRemove.add(
+    registerEventListener(doc, 'copy', (event: ClipboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      const target = getComposedEventTarget(event);
+      if (
+        target === rootElement ||
+        (isDOMNode(target) && rootElement.contains(target))
+      ) {
+        return;
+      }
+      const shouldIntercept = editor.read('latest', () => {
+        const selection = $getSelection();
+        return (
+          rootElement.contains(getActiveElement(rootElement)) &&
+          $isTableSelection(selection) &&
+          $isSelectionInTable(selection, tableNode)
+        );
+      });
+      if (shouldIntercept) {
+        event.preventDefault();
+        editor.dispatchCommand(COPY_COMMAND, event);
+      }
+    }),
+  );
+
   tableObserver.listenersToRemove.add(
     editor.registerCommand(
       FORMAT_TEXT_COMMAND,
@@ -622,15 +1058,6 @@ export function applyTableHandlers(
           tableObserver.$formatCells(payload);
 
           return true;
-        } else if ($isRangeSelection(selection)) {
-          const tableCellNode = $findMatchingParent(
-            selection.anchor.getNode(),
-            n => $isTableCellNode(n),
-          );
-
-          if (!$isTableCellNode(tableCellNode)) {
-            return false;
-          }
         }
 
         return false;
@@ -657,30 +1084,30 @@ export function applyTableHandlers(
           return false;
         }
 
-        // Align the table if the entire table is selected
-        if ($isFullTableSelection(selection, tableNode)) {
-          tableNode.setFormat(formatType);
-          return true;
-        }
-
         const [tableMap, anchorCell, focusCell] = $computeTableMap(
           tableNode,
           anchorNode,
           focusNode,
         );
-        const maxRow = Math.max(
-          anchorCell.startRow + anchorCell.cell.__rowSpan - 1,
-          focusCell.startRow + focusCell.cell.__rowSpan - 1,
-        );
-        const maxColumn = Math.max(
-          anchorCell.startColumn + anchorCell.cell.__colSpan - 1,
-          focusCell.startColumn + focusCell.cell.__colSpan - 1,
-        );
-        const minRow = Math.min(anchorCell.startRow, focusCell.startRow);
-        const minColumn = Math.min(
-          anchorCell.startColumn,
-          focusCell.startColumn,
-        );
+        // The same rect TableSelection.getNodes() walks. A naive min/max over
+        // the two cells' own spans is not enough: a merged cell that straddles
+        // the boundary pulls the rect outwards, and $computeTableCellRectBoundary
+        // iterates until it stops growing. Using the smaller rect here left the
+        // cells that only the expansion brings in selected and highlighted but
+        // unformatted.
+        const {minColumn, maxColumn, minRow, maxRow} =
+          $computeTableCellRectBoundary(tableMap, anchorCell, focusCell);
+
+        if (
+          minRow === 0 &&
+          minColumn === 0 &&
+          maxRow === tableMap.length - 1 &&
+          maxColumn === tableMap[0].length - 1
+        ) {
+          tableNode.setFormat(formatType);
+          return true;
+        }
+
         const visited = new Set<TableCellNode>();
         for (let i = minRow; i <= maxRow; i++) {
           for (let j = minColumn; j <= maxColumn; j++) {
@@ -835,7 +1262,7 @@ export function $handleTableSelectionChangeCommand(
   const prevSelection = $getPreviousSelection();
 
   const nextFocus = tableObservers.getAndClearNextFocus();
-  if (nextFocus !== null) {
+  if (nextFocus !== null && $isTableNode($getNodeByKey(nextFocus.tableKey))) {
     const {tableKey, focusCell} = nextFocus;
     const observerAndTable = tableObservers.observers.get(tableKey);
     invariant(
@@ -885,26 +1312,28 @@ export function $handleTableSelectionChangeCommand(
     $isRangeSelection(selection) &&
     selection.isCollapsed()
   ) {
-    const tableNode = $getNodeByKeyOrThrow<TableNode>(
-      shouldCheckSelectionForTable,
-    );
-    const anchor = selection.anchor.getNode();
-    const firstRow = tableNode.getFirstChild();
-    const anchorCell = $findCellNode(anchor);
-    if (anchorCell !== null && $isTableRowNode(firstRow)) {
-      const firstCell = firstRow.getFirstChild();
-      if (
-        $isTableCellNode(firstCell) &&
-        tableNode.is(
-          $findMatchingParent(
-            anchorCell,
-            node => node.is(tableNode) || node.is(firstCell),
-          ),
-        )
-      ) {
-        // The selection moved to the table, but not in the first cell
-        firstCell.selectStart();
-        return true;
+    // The table may have been removed before this selection change
+    // was dispatched, in which case there is nothing to check
+    const tableNode = $getNodeByKey(shouldCheckSelectionForTable);
+    if ($isTableNode(tableNode)) {
+      const anchor = selection.anchor.getNode();
+      const firstRow = tableNode.getFirstChild();
+      const anchorCell = $findCellNode(anchor);
+      if (anchorCell !== null && $isTableRowNode(firstRow)) {
+        const firstCell = firstRow.getFirstChild();
+        if (
+          $isTableCellNode(firstCell) &&
+          tableNode.is(
+            $findMatchingParent(
+              anchorCell,
+              node => node.is(tableNode) || node.is(firstCell),
+            ),
+          )
+        ) {
+          // The selection moved to the table, but not in the first cell
+          firstCell.selectStart();
+          return true;
+        }
       }
     }
   }
@@ -917,20 +1346,20 @@ export function $handleTableSelectionChangeCommand(
     $fixRangeSelectionForSelectedTable(selection, tableObservers);
   }
 
-  // Generic selection logic that runs across every table observer when the selection changes.
-  // Note: the selection might have changed in the code above, which re-dispatches the selection change command
-  // and gets handled here on the second pass. This should be refactored.
-  const tableNodesAndObservers = Array.from(
-    tableObservers.observers.entries(),
-  ).map(([tableKey, [tableObserver]]) => ({
-    tableNode: $getNodeByKeyOrThrow<TableNode>(tableKey),
+  return false;
+}
+
+/** Synchronize selection UI after table DOM and mutation listeners are ready. */
+export function $syncTableSelectionObservers(
+  tableObservers: TableObservers,
+  editor: LexicalEditor,
+): void {
+  for (const [
+    tableNode,
     tableObserver,
-  }));
-  for (const {tableNode, tableObserver} of tableNodesAndObservers) {
+  ] of tableObservers.$getTableNodesAndObservers()) {
     $syncTableSelectionState(editor, tableNode, tableObserver);
   }
-
-  return false;
 }
 
 /**
@@ -952,6 +1381,36 @@ function $fixRangeSelectionForSelectedTable(
     ? $findTableNode(anchorCellNode)
     : null;
   const focusCellTable = focusCellNode ? $findTableNode(focusCellNode) : null;
+
+  // iOS can double-tap an empty cell by issuing only selectionchange after
+  // the first tap's pointerup. Its word selection reaches outside the cell;
+  // expanding that range below would let the next keystroke delete the table.
+  // Only repair a native range from the caret in the last touch-tapped empty
+  // cell. Model selections are dirty, and drags/keyboard input clear the tap.
+  if (
+    tableObservers.touchTapCellKey !== null &&
+    !selection.dirty &&
+    !selection.isCollapsed() &&
+    $isRangeSelection(prevSelection) &&
+    prevSelection.isCollapsed() &&
+    !(anchorCellNode && anchorCellNode.is(focusCellNode))
+  ) {
+    const paragraph = $getNodeByKey(prevSelection.anchor.key);
+    const cell = paragraph && paragraph.getParent();
+    if (
+      $isElementNode(paragraph) &&
+      paragraph.isEmpty() &&
+      $isTableCellNode(cell) &&
+      cell.getKey() === tableObservers.touchTapCellKey &&
+      cell
+        .getChildren()
+        .every(child => $isElementNode(child) && child.isEmpty()) &&
+      (anchor.is(prevSelection.anchor) || focus.is(prevSelection.anchor))
+    ) {
+      $setSelection(prevSelection.clone());
+      return;
+    }
+  }
   const isBackward = selection.isBackward();
 
   const isSameTable =
@@ -1009,46 +1468,64 @@ function $fixRangeSelectionForSelectedTable(
     // has range selection, then we convert it into table selection
     // For example, this fires when dragging up from first cell, outside of the table, or when clicking a cell
     // then shift-clicking another cell.
-    const observerInfo = tableObservers.observers.get(anchorCellTable.getKey());
-    invariant(
-      !!observerInfo,
-      'tableObserver not found for tableKey: %s',
-      anchorCellTable.getKey(),
-    );
-    const [tableObserver] = observerInfo;
     if (!anchorCellNode.is(focusCellNode)) {
-      tableObserver.$setAnchorCellForSelection(
-        $getObserverCellFromCellNodeOrThrow(tableObserver, anchorCellNode),
+      // Selection normalization is model work: the table or cells may not
+      // have DOM yet. Its observer will synchronize after reconciliation.
+      $setSelection(
+        $createTableSelectionFrom(
+          anchorCellTable,
+          anchorCellNode,
+          focusCellNode,
+        ),
       );
-      tableObserver.$setFocusCellForSelection(
-        $getObserverCellFromCellNodeOrThrow(tableObserver, focusCellNode),
-        true,
-      );
+      return;
     }
+    const observerInfo = tableObservers.observers.get(anchorCellTable.getKey());
+    if (observerInfo === undefined) {
+      return;
+    }
+    const [tableObserver] = observerInfo;
 
     // Handle case when the pointer type is touch and the current and
     // previous selection are collapsed, and the previous anchor and current
-    // focus cell nodes are different, then we convert it into table selection
-    // However, only do this if the table observer is actively selecting (user dragging)
-    // to prevent unwanted selections when simply tapping between cells on mobile
+    // focus cell nodes are different, then we convert it into table selection.
+    // This must only happen for a gesture that is actually dragging across
+    // cells: a tap places a caret in a new cell while the pointer is still
+    // down, so keying off isSelecting alone converts consecutive taps into a
+    // table selection (#8538).
     if (
       tableObserver.pointerType === 'touch' &&
       tableObserver.isSelecting &&
+      tableObserver.isPointerDrag &&
       selection.isCollapsed() &&
       $isRangeSelection(prevSelection) &&
       prevSelection.isCollapsed()
     ) {
-      const prevAnchorCellNode = $findCellNode(prevSelection.anchor.getNode());
-      if (prevAnchorCellNode && !prevAnchorCellNode.is(focusCellNode)) {
-        tableObserver.$setAnchorCellForSelection(
-          $getObserverCellFromCellNodeOrThrow(
-            tableObserver,
+      const prevAnchorNode = $getNodeByKey(prevSelection.anchor.key);
+      const prevAnchorCellNode =
+        prevAnchorNode && $findCellNode(prevAnchorNode);
+      // Being a drag is not enough: it has to have left the cell it started
+      // on. A drag that stays inside one cell is selecting text there, and
+      // the caret the browser moves as it goes would otherwise be paired with
+      // whatever cell the previous gesture left in the range selection,
+      // producing exactly the multi-cell selection tapping is meant to avoid.
+      const {pointerStartCell} = tableObserver;
+      const pointerStartNode =
+        pointerStartCell && $getNearestNodeFromDOMNode(pointerStartCell.elem);
+      const hasLeftStartCell =
+        pointerStartNode !== null && !pointerStartNode.is(focusCellNode);
+      if (
+        hasLeftStartCell &&
+        prevAnchorCellNode &&
+        anchorCellTable.is($findTableNode(prevAnchorCellNode)) &&
+        !prevAnchorCellNode.is(focusCellNode)
+      ) {
+        $setSelection(
+          $createTableSelectionFrom(
+            anchorCellTable,
             prevAnchorCellNode,
+            focusCellNode,
           ),
-        );
-        tableObserver.$setFocusCellForSelection(
-          $getObserverCellFromCellNodeOrThrow(tableObserver, focusCellNode),
-          true,
         );
         tableObserver.pointerType = null;
       }
@@ -1065,17 +1542,23 @@ function $fixTableSelectionForSelectedTable(
 ) {
   const editorWindow = getEditorWindow(editor);
   const prevSelection = $getPreviousSelection();
+  // A changed model selection is authoritative; the DOM may still describe
+  // the previous selection. Only an unchanged TableSelection can represent a
+  // native drag that has escaped the table without changing the model yet.
   if (!selection.is(prevSelection)) {
     return;
   }
-  const tableNode = $getNodeByKeyOrThrow<TableNode>(selection.tableKey);
+  const tableNode = $getTableNodeByKeyOrThrow(selection.tableKey);
   // if selection goes outside of the table we need to change it to Range selection
   const domSelection = getDOMSelection(editorWindow);
-  if (domSelection && domSelection.anchorNode && domSelection.focusNode) {
-    const focusNode = $getNearestNodeFromDOMNode(domSelection.focusNode);
+  const points =
+    domSelection &&
+    getDOMSelectionPoints(domSelection, editor.getRootElement());
+  if (domSelection && points && points.anchorNode && points.focusNode) {
+    const focusNode = $getNearestNodeFromDOMNode(points.focusNode);
     const isFocusOutside = focusNode && !tableNode.isParentOf(focusNode);
 
-    const anchorNode = $getNearestNodeFromDOMNode(domSelection.anchorNode);
+    const anchorNode = $getNearestNodeFromDOMNode(points.anchorNode);
     const isAnchorInside = anchorNode && tableNode.isParentOf(anchorNode);
 
     if (isFocusOutside && isAnchorInside && domSelection.rangeCount > 0) {
@@ -1100,34 +1583,57 @@ function $syncTableSelectionState(
   tableObserver: TableObserver,
 ) {
   const selection = $getSelection();
-  const prevSelection = $getPreviousSelection();
+  const isSelected = tableNode.isSelected();
   if (
-    selection &&
-    !selection.is(prevSelection) &&
-    ($isTableSelection(selection) || $isTableSelection(prevSelection)) &&
-    tableObserver.tableSelection &&
-    !tableObserver.tableSelection.is(prevSelection)
+    !(
+      $isTableSelection(selection) && selection.tableKey === tableNode.getKey()
+    ) &&
+    !tableObserver.isHighlightingCells &&
+    !tableObserver.hasHijackedSelectionStyles &&
+    !isSelected
   ) {
-    if (
-      $isTableSelection(selection) &&
-      selection.tableKey === tableObserver.tableNodeKey
-    ) {
-      tableObserver.$updateTableTableSelection(selection);
-    } else if (
-      !$isTableSelection(selection) &&
-      $isTableSelection(prevSelection) &&
-      prevSelection.tableKey === tableObserver.tableNodeKey
-    ) {
-      tableObserver.$updateTableTableSelection(null);
+    return;
+  }
+  // MutationObserver callbacks have not necessarily run yet. Refresh the grid
+  // now so newly inserted/replaced cells can be selected and highlighted.
+  const {tableElement} = tableObserver.$lookup();
+  tableObserver.table = getTable(tableNode, tableElement);
+  if (
+    $isTableSelection(selection) &&
+    selection.tableKey === tableNode.getKey()
+  ) {
+    const anchor = $getNodeByKey(selection.anchor.key);
+    const focus = $getNodeByKey(selection.focus.key);
+    if ($isTableCellNode(anchor) && $isTableCellNode(focus)) {
+      const anchorCell = $getObserverCellFromCellNodeOrThrow(
+        tableObserver,
+        anchor,
+      );
+      const focusCell = $getObserverCellFromCellNodeOrThrow(
+        tableObserver,
+        focus,
+      );
+      tableObserver.anchorCell = anchorCell;
+      tableObserver.anchorCellNodeKey = anchor.getKey();
+      tableObserver.anchorX = anchorCell.x;
+      tableObserver.anchorY = anchorCell.y;
+      tableObserver.focusCell = focusCell;
+      tableObserver.focusCellNodeKey = focus.getKey();
+      tableObserver.focusX = focusCell.x;
+      tableObserver.focusY = focusCell.y;
     }
+    tableObserver.$updateTableTableSelection(selection);
+  } else if (tableObserver.isHighlightingCells) {
+    // Only clear an active table selection's highlighting. Pointerdown also
+    // prepares tableSelection while the native caret is still a range; clearing
+    // that here would erase the starting cell of the drag.
+    // Preserve the new model selection when removing the old highlighting.
+    tableObserver.$clearHighlight(false);
   }
 
-  if (tableObserver.hasHijackedSelectionStyles && !tableNode.isSelected()) {
+  if (tableObserver.hasHijackedSelectionStyles && !isSelected) {
     $removeHighlightStyleToTable(editor, tableObserver);
-  } else if (
-    !tableObserver.hasHijackedSelectionStyles &&
-    tableNode.isSelected()
-  ) {
+  } else if (!tableObserver.hasHijackedSelectionStyles && isSelected) {
     $addHighlightStyleToTable(editor, tableObserver);
   }
 }
@@ -1543,17 +2049,32 @@ function getCorner(
   return [colName, rowName];
 }
 
-function getCornerOrThrow(
+/**
+ * Resolve the corner of `rect` that the anchor sits on.
+ *
+ * `$computeTableCellRectBoundary` grows the rect until it contains every
+ * merged cell that straddles an edge, so the anchor is not guaranteed to be at
+ * a corner of the result — a cell merged across the rect's edge pushes that
+ * edge past the anchor. Fall back to the corner opposite the focus, and when
+ * the focus is not at a corner either, to the top-left.
+ *
+ * TODO the last fallback doesn't have to be arbitrary, use the closest corner
+ * instead.
+ */
+function getAnchorCorner(
   rect: TableCellRectBoundary,
-  cellValue: TableMapValueType,
+  anchorCellValue: TableMapValueType,
+  focusCellValue: TableMapValueType,
 ): Corner {
-  const corner = getCorner(rect, cellValue);
-  invariant(
-    corner !== null,
-    'getCornerOrThrow: cell %s is not at a corner of rect',
-    cellValue.cell.getKey(),
-  );
-  return corner;
+  const anchorCorner = getCorner(rect, anchorCellValue);
+  if (anchorCorner) {
+    return anchorCorner;
+  }
+  const focusCorner = getCorner(rect, focusCellValue);
+  if (focusCorner) {
+    return oppositeCorner(focusCorner);
+  }
+  return ['minColumn', 'minRow'];
 }
 
 function oppositeCorner([colName, rowName]: Corner): Corner {
@@ -1600,25 +2121,14 @@ function $extractRectCorners(
     anchorCellValue,
     newFocusCellValue,
   );
-  const anchorCorner = getCorner(rect, anchorCellValue);
-  if (anchorCorner) {
-    return [
-      cellAtCornerOrThrow(tableMap, rect, anchorCorner),
-      cellAtCornerOrThrow(tableMap, rect, oppositeCorner(anchorCorner)),
-    ];
-  }
-  const newFocusCorner = getCorner(rect, newFocusCellValue);
-  if (newFocusCorner) {
-    return [
-      cellAtCornerOrThrow(tableMap, rect, oppositeCorner(newFocusCorner)),
-      cellAtCornerOrThrow(tableMap, rect, newFocusCorner),
-    ];
-  }
-  // TODO this doesn't have to be arbitrary, use the closest corner instead
-  const newAnchorCorner: Corner = ['minColumn', 'minRow'];
+  const anchorCorner = getAnchorCorner(
+    rect,
+    anchorCellValue,
+    newFocusCellValue,
+  );
   return [
-    cellAtCornerOrThrow(tableMap, rect, newAnchorCorner),
-    cellAtCornerOrThrow(tableMap, rect, oppositeCorner(newAnchorCorner)),
+    cellAtCornerOrThrow(tableMap, rect, anchorCorner),
+    cellAtCornerOrThrow(tableMap, rect, oppositeCorner(anchorCorner)),
   ];
 }
 
@@ -1636,7 +2146,7 @@ function $adjustFocusInDirection(
   );
   const spans = $computeTableCellRectSpans(tableMap, rect);
   const {topSpan, leftSpan, bottomSpan, rightSpan} = spans;
-  const anchorCorner = getCornerOrThrow(rect, anchorCellValue);
+  const anchorCorner = getAnchorCorner(rect, anchorCellValue, focusCellValue);
   const [focusColumn, focusRow] = oppositeCorner(anchorCorner);
   let fCol = rect[focusColumn];
   let fRow = rect[focusRow];
@@ -1692,24 +2202,6 @@ function $isSelectionInTable(
     return isAnchorInside && isFocusInside;
   }
 
-  return false;
-}
-
-function $isFullTableSelection(
-  selection: null | BaseSelection,
-  tableNode: TableNode,
-): boolean {
-  if ($isTableSelection(selection)) {
-    const anchorNode = selection.anchor.getNode() as TableCellNode;
-    const focusNode = selection.focus.getNode() as TableCellNode;
-    if (tableNode && anchorNode && focusNode) {
-      const [map] = $computeTableMap(tableNode, anchorNode, focusNode);
-      return (
-        anchorNode.getKey() === map[0][0].cell.getKey() &&
-        focusNode.getKey() === map[map.length - 1].at(-1)!.cell.getKey()
-      );
-    }
-  }
   return false;
 }
 
@@ -1886,6 +2378,27 @@ function $findNextTableCell<D extends CaretDirection>(
   return null;
 }
 
+/**
+ * True when the selection focus sits before `tableNode` in document order —
+ * the only side an ArrowDown can move the caret into the table from.
+ */
+function $isSelectionBeforeTable(
+  selection: null | BaseSelection,
+  tableNode: TableNode,
+): boolean {
+  if (!$isRangeSelection(selection)) {
+    return false;
+  }
+  const focusCaret = $caretFromPoint(selection.focus, 'next');
+  // A ChildCaret is ordered at the table's 'enter' (pre-order) position, so
+  // any caret strictly before it is outside of and above the table.
+  const tableCaret = $getChildCaret(tableNode, 'next');
+  return (
+    $getCommonAncestor(focusCaret.origin, tableCaret.origin) !== null &&
+    $comparePointCaretNext(focusCaret, tableCaret) < 0
+  );
+}
+
 function $handleArrowKey(
   editor: LexicalEditor,
   event: KeyboardEvent,
@@ -1903,6 +2416,7 @@ function $handleArrowKey(
 
   const selection = $getSelection();
 
+  // Handle arrow key into a table (including from a table into a nested table)
   if (!$isSelectionInTable(selection, tableNode)) {
     if ($isRangeSelection(selection)) {
       if (direction === 'backward') {
@@ -2072,7 +2586,17 @@ function $handleArrowKey(
         }
       }
     }
-    if (direction === 'down' && $isScrollableTablesActive(editor)) {
+    if (
+      direction === 'down' &&
+      $isScrollableTablesActive(editor) &&
+      // Only arm the workaround when ArrowDown could actually move the caret
+      // into the table. From a caret after the table (e.g. the block cursor
+      // below a trailing table) ArrowDown moves nothing, so the flag would
+      // survive to be consumed by an unrelated later selection change — an
+      // ArrowUp back into the last row would then be snapped to the first
+      // cell.
+      $isSelectionBeforeTable(selection, tableNode)
+    ) {
       // Enable Firefox workaround
       tableObservers.setShouldCheckSelectionForTable(tableNode.getKey());
     }
@@ -2146,7 +2670,15 @@ function $handleArrowKey(
           return false;
         }
 
-        const range = domSelection.getRangeAt(0);
+        // getDOMSelectionRange rather than getRangeAt(0), which is retargeted
+        // to the shadow host when the editor is in a shadow tree
+        const range = getDOMSelectionRange(
+          domSelection,
+          editor.getRootElement(),
+        );
+        if (range === null) {
+          return false;
+        }
         edgeSelectionRect = range.getBoundingClientRect();
       }
 
@@ -2201,7 +2733,10 @@ function $handleArrowKey(
       }
     }
   } else if ($isTableSelection(selection)) {
-    const {anchor, focus} = selection;
+    const {anchor, focus, tableKey} = selection;
+    if (tableKey !== tableNode.getKey()) {
+      return false;
+    }
     const anchorCellNode = $findMatchingParent(
       anchor.getNode(),
       $isTableCellNode,
@@ -2313,7 +2848,10 @@ function $getTableEdgeCursorPosition(
   if (!domSelection) {
     return undefined;
   }
-  const domAnchorNode = domSelection.anchorNode;
+  const domAnchorNode = getDOMSelectionPoints(
+    domSelection,
+    editor.getRootElement(),
+  ).anchorNode;
   const tableNodeParentDOM = editor.getElementByKey(tableNodeParent.getKey());
   const tableElement = getTableElement(
     tableNode,

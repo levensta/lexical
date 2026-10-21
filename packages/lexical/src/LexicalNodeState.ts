@@ -6,22 +6,54 @@
  *
  */
 
-import invariant from 'shared/invariant';
+import type {PROTOTYPE_CONFIG_METHOD} from './LexicalConstants';
+import type {
+  AnyStaticNodeConfigValue,
+  GetStaticNodeOwnConfig,
+  GetStaticNodeType,
+} from './LexicalNode';
+
+import invariant from '@lexical/internal/invariant';
 
 import {
   $getEditor,
   type Klass,
   type LexicalNode,
   type LexicalNodeConfig,
-  type LexicalUpdateJSON,
+  type LexicalParseJSON,
   NODE_STATE_KEY,
   type SerializedLexicalNode,
   type Spread,
-  type StaticNodeConfigRecord,
 } from '.';
-import {PROTOTYPE_CONFIG_METHOD} from './LexicalConstants';
+import {
+  type AnySerializationSchema,
+  isSchemaEqual,
+  type SchemaInput,
+  type SerializationSchema,
+} from './LexicalSchema';
 import {errorOnReadOnly} from './LexicalUpdates';
-import {getRegisteredNodeOrThrow, getStaticNodeConfig} from './LexicalUtils';
+import {
+  getRegisteredNodeOrThrow,
+  iterStaticNodeConfigChain,
+} from './LexicalUtils';
+
+const __DEV__ = process.env.NODE_ENV !== 'production';
+
+/**
+ * Read the state directly from the given object without `node.getLatest()`.
+ * Safe to use outside of editor state context or to read a previous version,
+ * equivalent to reading the property directly.
+ */
+export const NODE_STATE_DIRECT = 'direct';
+/**
+ * Use `node.getLatest()` before reading the state, per the lexical convention
+ * of only working with the latest version of a node.
+ */
+export const NODE_STATE_LATEST = 'latest';
+
+export type NodeStateVersion =
+  | typeof NODE_STATE_DIRECT
+  | typeof NODE_STATE_LATEST;
 
 /**
  * Get the value type (V) from a StateConfig
@@ -102,22 +134,47 @@ export type CollectStateJSON<
   {[K in keyof Tuple]: RequiredNodeStateConfigJSON<Tuple[K], Flat>}[number]
 >;
 
-type GetStaticNodeConfig<T extends LexicalNode> =
-  ReturnType<T[typeof PROTOTYPE_CONFIG_METHOD]> extends infer Record
-    ? Record extends StaticNodeConfigRecord<infer Type, infer Config>
-      ? Config & {readonly type: Type}
-      : never
+// Read a node's own config out of its $config() record. Preferentially read it
+// from the STATIC_NODE_CONFIG accessor (see {@link GetStaticNodeOwnConfig}),
+// which resolves the most-derived own config directly — including for an
+// abstract base class keyed by a symbol, which has no string `type` to index by.
+// A record produced by the {@link BaseStaticNodeConfig} fallback (a node that
+// declares no `extends`, or a legacy node) sets no accessor; for those we fall
+// back to resolving the own `type` (see {@link GetStaticNodeType}) and indexing
+// by it. The own type is read through a mapped type (`{[P in Type]: ...}[Type]`)
+// so that the indexed access resolves against the concrete key literal rather
+// than the record's broad string index signature when `T` is still generic.
+/** @internal */
+export type GetStaticNodeConfig<T extends LexicalNode> = [
+  GetStaticNodeOwnConfig<T>,
+] extends [never]
+  ? GetStaticNodeType<T> extends infer Type extends string
+    ? string extends Type
+      ? never
+      : {
+            [P in Type]: NonNullable<
+              ReturnType<T[typeof PROTOTYPE_CONFIG_METHOD]>[P]
+            >;
+          }[Type] extends infer Config extends AnyStaticNodeConfigValue
+        ? Config & {readonly type: Type}
+        : never
+    : never
+  : GetStaticNodeOwnConfig<T> extends infer Config extends
+        AnyStaticNodeConfigValue
+    ? Config & {readonly type: GetStaticNodeType<T>}
     : never;
 type GetStaticNodeConfigs<T extends LexicalNode> =
   GetStaticNodeConfig<T> extends infer OwnConfig
-    ? OwnConfig extends never
+    ? // `[X] extends [never]` checks for never without distributing (a naked
+      // `never` would otherwise collapse the whole conditional to never). A node
+      // with no $config — e.g. a legacy node keyed only by static getType() —
+      // yields never here and contributes no state configs.
+      [OwnConfig] extends [never]
       ? []
       : OwnConfig extends {extends: Klass<infer Parent>}
-        ? GetStaticNodeConfig<Parent> extends infer ParentNodeConfig
-          ? ParentNodeConfig extends never
-            ? [OwnConfig]
-            : [OwnConfig, ...GetStaticNodeConfigs<Parent>]
-          : OwnConfig
+        ? [GetStaticNodeConfig<Parent>] extends [never]
+          ? [OwnConfig]
+          : [OwnConfig, ...GetStaticNodeConfigs<Parent>]
         : [OwnConfig]
     : [];
 
@@ -135,6 +192,114 @@ type CollectStateConfigs<Configs> = Configs extends [
 export type GetNodeStateConfig<T extends LexicalNode> = CollectStateConfigs<
   GetStaticNodeConfigs<T>
 >;
+
+/**
+ * The contribution of a class that declares no schema: no properties, and the
+ * neutral element of the fold below.
+ *
+ * An empty object rather than `unknown`, which is also neutral for `&` but is
+ * not a *value* type — a node with no schema anywhere in its chain would
+ * otherwise come back as `unknown`, which cannot even be spread.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+type NoSchemaInput = {};
+
+/**
+ * What one config's schema accepts, or {@link NoSchemaInput} where it declares
+ * none.
+ *
+ * Both tests are written against `[Config]` so that neither distributes.
+ * `never` is the fold's absorbing element twice over — `never & X` is `never`,
+ * and `keyof never` is every key, so an `Omit` against it erases the whole
+ * ancestor chain — and a naked check maps `never` to `never` rather than to the
+ * neutral element. Not distributing also gives a union-valued config the
+ * conservative answer: `keyof` a union is the *intersection* of its keys, so a
+ * distributed check would quietly hand the `Omit` below an empty key set and
+ * turn off the derived-wins rule it exists to enforce.
+ */
+type SchemaInputOfConfig<Config> = [Config] extends [never]
+  ? NoSchemaInput
+  : [Config] extends [{json: infer Json}]
+    ? SchemaInput<Json>
+    : NoSchemaInput;
+
+/**
+ * Fold a class's config chain, most derived first, into the properties it
+ * accepts.
+ *
+ * `Omit` rather than a bare intersection: a subclass that re-declares an
+ * inherited property *replaces* it — `composeSchema` resolves the key to one
+ * winning schema, most derived first — so intersecting the two would report
+ * the ancestor's domain for a property the subclass widened, and `never` for
+ * one it changed outright. Accumulating derived-first means the winner is
+ * always already in `Acc`, so each ancestor is admitted only for the keys
+ * nothing below it claimed.
+ *
+ * An accumulator rather than the direct form (`Own & Omit<Rest, keyof Own>`):
+ * the recursive call is then the whole of the true branch, which is what makes
+ * it a tail call TypeScript can eliminate. Nesting it inside the intersection
+ * instead caps the fold at ~30 links with a bare TS2589 and a silently
+ * truncated result.
+ */
+type ComposeSchemaInputs<
+  Configs extends readonly unknown[],
+  Acc = NoSchemaInput,
+> = Configs extends [infer OwnConfig, ...infer ParentConfigs]
+  ? ComposeSchemaInputs<
+      ParentConfigs,
+      Spread<Acc, SchemaInputOfConfig<OwnConfig>>
+    >
+  : Acc;
+
+/**
+ * The flat NodeState keys a node accepts, each holding whatever JSON carried
+ * it.
+ *
+ * The keys of {@link CollectStateJSON}, with the values widened to `unknown`.
+ * A `StateConfig`'s `parse` is `(jsonValue: unknown) => V` — a state is read
+ * from unparsed JSON and normalizes it, and nothing records what it accepted on
+ * the way in, so `V` describes what comes *out* of that parse and says nothing
+ * about what may go in. Naming `V` here claimed the two were the same and was
+ * wrong for any state whose parse converts: a `string`-to-`Date` state typed its
+ * input as `Date`, so `nodeArbitrary` handed a caller a string that
+ * `timestamp.getTime()` would compile against and throw on.
+ */
+type CollectStateInput<Tuple extends readonly RequiredNodeStateConfig[]> = {
+  readonly [K in keyof CollectStateJSON<Tuple, true>]?: unknown;
+};
+
+/**
+ * Every serialized property `T` accepts, composed across its `$config` chain —
+ * its own and the ones it inherits.
+ *
+ * The *accepted* input rather than the parsed output, which is wider wherever
+ * a schema reads more than it writes: a legacy alias, a number spelled as a
+ * string, an absent property. That is what a generator of example JSON should
+ * say it produces.
+ *
+ * Both halves are folded over one binding of {@link GetStaticNodeConfigs} — the
+ * chain walk NodeState already runs for its own configs — so nothing here can
+ * disagree with `getComposedSchemaFields` about which classes are in a node's
+ * chain. That walk follows each config's `extends`, which is why every config
+ * in the tree names one: the runtime defaults it to the superclass, but the
+ * type has no way to recover what was left out, and a class that omits it
+ * contributes only its own declarations and hides its ancestors'.
+ *
+ * The walk is the only bound on chain depth, shared with `GetNodeStateConfig`
+ * and reached in the hundreds rather than the sixteen an earlier bound here
+ * allowed; the fold itself is tail-recursive and adds none.
+ */
+export type LexicalSchemaInput<T extends LexicalNode> =
+  GetStaticNodeConfigs<T> extends infer Configs extends readonly unknown[]
+    ? Prettify<
+        ComposeSchemaInputs<Configs> &
+          // Flat NodeState is the other half of what a node serializes as
+          // top-level properties — `getComposedSchemaFields` folds it in
+          // beside the schema's, so anything describing what a node accepts
+          // has to as well.
+          CollectStateInput<CollectStateConfigs<Configs>>
+      >
+    : never;
 
 /**
  * The NodeState JSON produced by this LexicalNode
@@ -162,6 +327,17 @@ export type NodeStateJSON<T extends LexicalNode> = Prettify<
  * //    ^? State<'numberOrNull', StateValueConfig<number | null>>
  * const numberState = createState('number', {parse: (v) => typeof v === 'number' ? v : 0});
  * //    ^? State<'number', StateValueConfig<number>>
+ * ```
+ *
+ * The {@link Parse} schema builders exported from `lexical` (such as
+ * {@link stringValue}, {@link numberValue}, {@link booleanValue}, and
+ * {@link enumValue}) cover the common primitive and enumeration cases and
+ * return a parse function you can use directly:
+ *
+ * @example
+ * ```ts
+ * const formatState = createState('format', {parse: numberValue()});
+ * //    ^? State<'format', StateValueConfig<number>>
  * ```
  *
  * Only the parse option is required, it is generally not useful to
@@ -257,18 +433,74 @@ export class StateConfig<K extends string | symbol, V> {
    */
   readonly defaultValue: V;
   readonly resetOnCopyNode: boolean;
+  /**
+   * The {@link SerializationSchema} for this state's value, present when its
+   * `parse` is a schema (e.g. `createState('mode', {parse: enumValue([...])})`).
+   * It exposes the value's introspectable domain so tooling such as
+   * `@lexical/fast-check` can generate examples of this state. It is undefined
+   * when `parse` is a plain function with no schema metadata.
+   */
+  readonly schema?: AnySerializationSchema;
   constructor(key: K, stateValueConfig: StateValueConfig<V>) {
     this.key = key;
+    // Binding below strips a schema's own properties from this.parse, so
+    // resolve it first and keep the original when it carries introspectable
+    // metadata.
+    const schema = isIntrospectableSchema(stateValueConfig.parse)
+      ? stateValueConfig.parse
+      : undefined;
+    this.schema = schema;
     this.parse = stateValueConfig.parse.bind(stateValueConfig);
     this.unparse = (stateValueConfig.unparse || coerceToJSON).bind(
       stateValueConfig,
     );
-    this.isEqual = (stateValueConfig.isEqual || Object.is).bind(
-      stateValueConfig,
-    );
-    this.defaultValue = this.parse(undefined);
+    // A schema already knows its own domain, so a `parse` that is one supplies
+    // the equality and the default this state compares against — unless the
+    // caller declared its own. Without this a reference-typed schema
+    // (arrayValue/objectValue, which return a fresh value per parse) would fall
+    // back to Object.is: NodeState.toJSON would never recognize the default and
+    // would write it into every node, and $setState would dirty the node on
+    // every write of an equal value.
+    this.isEqual = stateValueConfig.isEqual
+      ? stateValueConfig.isEqual.bind(stateValueConfig)
+      : schema !== undefined && schema.isEqual !== undefined
+        ? (a, b) => isSchemaEqual(schema, a, b)
+        : Object.is;
+    // $getState hands this very value to every node that has none of its own,
+    // so a reference-typed default is shared. Every combinator that derives
+    // its own default deep-freezes it, which turns "mutate one node's default
+    // and corrupt every node" into a loud error; the exception is
+    // `transformValue`, whose default is the caller's `transform` applied to
+    // the inner default and so the caller's object to keep unfrozen.
+    this.defaultValue =
+      schema !== undefined ? schema.defaultValue : this.parse(undefined);
     this.resetOnCopyNode = stateValueConfig.resetOnCopyNode || false;
   }
+}
+
+/**
+ * Whether a `parse` is one of the {@link SerializationSchema} builders, which
+ * carry their domain alongside the coercion.
+ *
+ * It tests `meta.kind`, not `meta` alone: an unrelated parse function that
+ * happens to own a `meta` property is not a schema, and publishing it as one
+ * would hand introspecting tools a shape they cannot read. `defaultValue` is
+ * required for the same reason from the other direction — it is what this
+ * state's default is *taken from* below, so a function matching on `meta` but
+ * carrying no default would silently replace `parse(undefined)` with
+ * `undefined`, and every node with no value of its own would read as unset.
+ */
+function isIntrospectableSchema<V>(
+  parse: StateValueConfig<V>['parse'],
+): parse is SerializationSchema<V> {
+  return (
+    'meta' in parse &&
+    typeof parse.meta === 'object' &&
+    parse.meta !== null &&
+    'kind' in parse.meta &&
+    typeof parse.meta.kind === 'string' &&
+    'defaultValue' in parse
+  );
 }
 
 /**
@@ -314,26 +546,27 @@ export function createState<K extends symbol | string, V>(
  * state on the given node, and will return `stateConfig.defaultValue` if the
  * state has never been set on this node.
  *
- * The `version` parameter is optional and should generally be `'latest'`,
+ * The `version` parameter is optional and should generally be {@link NODE_STATE_LATEST},
  * consistent with the behavior of other node methods and functions,
  * but for certain use cases such as `updateDOM` you may have a need to
- * use `'direct'` to read the state from a previous version of the node.
+ * use {@link NODE_STATE_DIRECT} to read the state from a previous version of the node.
  *
- * For very advanced use cases, you can expect that 'direct' does not
+ * For very advanced use cases, you can expect that {@link NODE_STATE_DIRECT} does not
  * require an editor state, just like directly accessing other properties
  * of a node without an accessor (e.g. `textNode.__text`).
  *
  * @param node Any LexicalNode
  * @param stateConfig The configuration of the state to read
- * @param version The default value 'latest' will read the latest version of the node state, 'direct' will read the version that is stored on this LexicalNode which not reflect the version used in the current editor state
+ * @param version The default value {@link NODE_STATE_LATEST} will read the latest version of the node state, {@link NODE_STATE_DIRECT} will read the version that is stored on this LexicalNode which not reflect the version used in the current editor state
  * @returns The current value from the state, or the default value provided by the configuration.
  */
 export function $getState<K extends string, V>(
   node: LexicalNode,
   stateConfig: StateConfig<K, V>,
-  version: 'latest' | 'direct' = 'latest',
+  version: NodeStateVersion = NODE_STATE_LATEST,
 ): V {
-  const latestOrDirectNode = version === 'latest' ? node.getLatest() : node;
+  const latestOrDirectNode =
+    version === NODE_STATE_LATEST ? node.getLatest() : node;
   const state = latestOrDirectNode.__state;
   if (state) {
     $checkCollision(node, stateConfig, state);
@@ -344,11 +577,11 @@ export function $getState<K extends string, V>(
 
 /**
  * Given two versions of a node and a stateConfig, compare their state values
- * using `$getState(nodeVersion, stateConfig, 'direct')`.
+ * using `$getState(nodeVersion, stateConfig, NODE_STATE_DIRECT)`.
  * If the values are equal according to `stateConfig.isEqual`, return `null`,
  * otherwise return `[value, prevValue]`.
  *
- * This is useful for implementing updateDOM. Note that the `'direct'`
+ * This is useful for implementing updateDOM. Note that the `NODE_STATE_DIRECT`
  * version argument is used for both nodes.
  *
  * @param node Any LexicalNode
@@ -361,8 +594,8 @@ export function $getStateChange<T extends LexicalNode, K extends string, V>(
   prevNode: T,
   stateConfig: StateConfig<K, V>,
 ): null | [value: V, prevValue: V] {
-  const value = $getState(node, stateConfig, 'direct');
-  const prevValue = $getState(prevNode, stateConfig, 'direct');
+  const value = $getState(node, stateConfig, NODE_STATE_DIRECT);
+  const prevValue = $getState(prevNode, stateConfig, NODE_STATE_DIRECT);
   return stateConfig.isEqual(value, prevValue) ? null : [value, prevValue];
 }
 
@@ -461,19 +694,30 @@ export function createSharedNodeState(
 ): SharedNodeState {
   const sharedConfigMap = new Map<string, AnyStateConfig>();
   const flatKeys = new Set<string>();
-  for (
-    let klass =
-      typeof nodeConfig === 'function' ? nodeConfig : nodeConfig.replace;
-    klass.prototype && klass.prototype.getType !== undefined;
-    klass = Object.getPrototypeOf(klass)
-  ) {
-    const {ownNodeConfig} = getStaticNodeConfig(klass);
+  for (const {ownNodeConfig} of iterStaticNodeConfigChain(
+    typeof nodeConfig === 'function' ? nodeConfig : nodeConfig.replace,
+  )) {
     if (ownNodeConfig && ownNodeConfig.stateConfigs) {
       for (const requiredStateConfig of ownNodeConfig.stateConfigs) {
         let stateConfig: AnyStateConfig;
         if ('stateConfig' in requiredStateConfig) {
           stateConfig = requiredStateConfig.stateConfig;
           if (requiredStateConfig.flat) {
+            if (__DEV__) {
+              // A flat state serializes at the top level of the node's JSON,
+              // where it is read bare and told from an absent key by being
+              // `undefined`. A serialized node comes from JSON.parse and
+              // inherits Object.prototype, so a key named for one of its
+              // members reads that member for a document that never carried
+              // it. The same rule `objectSchema` applies to a schema property,
+              // for the same reason. A nested state key is unaffected: it is
+              // read out of the `$` blob, which is a record of its own.
+              invariant(
+                !(stateConfig.key in Object.prototype),
+                'createState: flat state key "%s" is a member of Object.prototype, which a serialized node inherits, so it cannot be told apart from a key the document never carried',
+                stateConfig.key,
+              );
+            }
             flatKeys.add(stateConfig.key);
           }
         } else {
@@ -488,6 +732,20 @@ export function createSharedNodeState(
 
 type KnownStateMap = Map<AnyStateConfig, unknown>;
 type UnknownStateRecord = Record<string, unknown>;
+
+/**
+ * Keys that must never be written into an {@link UnknownStateRecord} from
+ * serialized (potentially untrusted) input. Writing a `__proto__` entry would
+ * re-parent the record's prototype, and because {@link NodeState.getValue}
+ * resolves keys with the `in` operator (which walks the prototype chain) an
+ * attacker could otherwise inject arbitrary state values via a crafted
+ * `__proto__`. These are never produced by {@link createState}.
+ */
+const UNSAFE_STATE_KEYS: ReadonlySet<string> = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+]);
 /**
  * @internal
  *
@@ -744,6 +1002,9 @@ export class NodeState<T extends LexicalNode> {
    * @param v The unknown value from an UnknownStateRecord
    */
   updateFromUnknown(k: string, v: unknown): void {
+    if (UNSAFE_STATE_KEYS.has(k)) {
+      return;
+    }
     const stateConfig = this.sharedNodeState.sharedConfigMap.get(k);
     if (stateConfig) {
       this.updateFromKnown(stateConfig, stateConfig.parse(v));
@@ -829,21 +1090,15 @@ export function $getSharedNodeState<T extends LexicalNode>(
  */
 export function $updateStateFromJSON<T extends LexicalNode>(
   node: T,
-  serialized: LexicalUpdateJSON<SerializedLexicalNode>,
+  serialized: LexicalParseJSON<SerializedLexicalNode>,
 ): T {
   const writable = node.getWritable();
+  // Only the nested NodeState (under NODE_STATE_KEY) is applied here; flat
+  // states, which serialize at the top level, are applied via $setState by the
+  // node's compiled serialization schema (see $applyJSONSetters).
   const unknownState = serialized[NODE_STATE_KEY];
-  let parseState = unknownState;
-  for (const k of $getSharedNodeState(writable).flatKeys) {
-    if (k in serialized) {
-      if (parseState === undefined || parseState === unknownState) {
-        parseState = {...unknownState};
-      }
-      parseState[k] = serialized[k as keyof typeof serialized];
-    }
-  }
-  if (writable.__state || parseState) {
-    $getWritableNodeState(node).updateFromJSON(parseState);
+  if (writable.__state || unknownState) {
+    $getWritableNodeState(node).updateFromJSON(unknownState);
   }
   return writable;
 }
@@ -930,6 +1185,9 @@ function parseAndPruneNextUnknownState(
   let nextUnknownState: undefined | UnknownStateRecord = undefined;
   if (unknownState) {
     for (const [k, v] of Object.entries(unknownState)) {
+      if (UNSAFE_STATE_KEYS.has(k)) {
+        continue;
+      }
       const stateConfig = sharedConfigMap.get(k);
       if (stateConfig) {
         if (!nextKnownState.has(stateConfig)) {

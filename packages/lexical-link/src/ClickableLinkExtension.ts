@@ -6,9 +6,13 @@
  *
  */
 
-import {namedSignals, NamedSignalsOutput} from '@lexical/extension';
-import {$findMatchingParent, isHTMLAnchorElement} from '@lexical/utils';
 import {
+  namedSignals,
+  type NamedSignalsOutput,
+  signal,
+} from '@lexical/extension';
+import {
+  $findMatchingParent,
   $getNearestNodeFromDOMNode,
   $getSelection,
   $isElementNode,
@@ -16,12 +20,14 @@ import {
   defineExtension,
   getNearestEditorFromDOMNode,
   isDOMNode,
-  LexicalEditor,
+  isHTMLAnchorElement,
+  type LexicalEditor,
+  registerEventListeners,
   safeCast,
 } from 'lexical';
 
 import {LinkExtension} from './LexicalLinkExtension';
-import {$isLinkNode} from './LexicalLinkNode';
+import {$isAutoLinkNode, $isLinkNode} from './LexicalLinkNode';
 
 function findMatchingDOM<T extends Node>(
   startNode: Node,
@@ -42,32 +48,61 @@ export interface ClickableLinkConfig {
   newTab: boolean;
   /** Disable this extension when true (default false) */
   disabled: boolean;
+  /**
+   * Resolve the window used to open links (defaults to the global window).
+   * Return null to leave the click unhandled.
+   */
+  getWindow: (editor: LexicalEditor) => Window | null;
+}
+
+function defaultGetWindow(): Window {
+  return window;
 }
 
 export function registerClickableLink(
   editor: LexicalEditor,
-  stores: NamedSignalsOutput<ClickableLinkConfig>,
+  // Older registration callers only provide disabled and newTab signals.
+  stores: Pick<
+    NamedSignalsOutput<ClickableLinkConfig>,
+    'disabled' | 'newTab'
+  > & {
+    getWindow?: NamedSignalsOutput<ClickableLinkConfig>['getWindow'];
+  },
   eventOptions: Pick<AddEventListenerOptions, 'signal'> = {},
 ): () => void {
+  const getWindow =
+    stores.getWindow ??
+    signal<ClickableLinkConfig['getWindow']>(defaultGetWindow);
   const onClick = (event: MouseEvent) => {
+    // `click` only fires for the primary button; every other button arrives
+    // as `auxclick` (middle, right, and the back / forward buttons). Only the
+    // middle button follows the link -- a right click belongs to the context
+    // menu, and the history buttons belong to the browser.
+    const isMiddle = event.button === 1;
+    if (event.type === 'auxclick' && !isMiddle) {
+      return;
+    }
     const target = event.target;
     if (!isDOMNode(target)) {
       return;
     }
     const nearestEditor = getNearestEditorFromDOMNode(target);
 
-    if (nearestEditor === null) {
+    if (nearestEditor !== editor) {
       return;
     }
 
     let url = null;
     let urlTarget = null;
+    let isUnlinkedAutolink = false;
     nearestEditor.update(() => {
       const clickedNode = $getNearestNodeFromDOMNode(target);
       if (clickedNode !== null) {
         const maybeLinkNode = $findMatchingParent(clickedNode, $isElementNode);
         if (!stores.disabled.peek()) {
           if ($isLinkNode(maybeLinkNode)) {
+            isUnlinkedAutolink =
+              $isAutoLinkNode(maybeLinkNode) && maybeLinkNode.getIsUnlinked();
             url = maybeLinkNode.sanitizeUrl(maybeLinkNode.getURL());
             urlTarget = maybeLinkNode.getTarget();
           } else {
@@ -81,45 +116,48 @@ export function registerClickableLink(
       }
     });
 
-    if (url === null || url === '') {
+    if (url === null || url === '' || isUnlinkedAutolink) {
       return;
     }
 
     // Allow user to select link text without following url
-    const selection = editor.getEditorState().read($getSelection, {editor});
+    const selection = editor.read('latest', $getSelection);
     if ($isRangeSelection(selection) && !selection.isCollapsed()) {
       event.preventDefault();
       return;
     }
 
-    const isMiddle = event.type === 'auxclick' && event.button === 1;
-    window.open(
-      url,
+    const newTab =
       stores.newTab.peek() ||
-        isMiddle ||
-        event.metaKey ||
-        event.ctrlKey ||
-        urlTarget === '_blank'
-        ? '_blank'
-        : '_self',
-    );
-    event.preventDefault();
-  };
-
-  const onMouseUp = (event: MouseEvent) => {
-    if (event.button === 1) {
-      onClick(event);
+      isMiddle ||
+      event.metaKey ||
+      event.ctrlKey ||
+      urlTarget === '_blank';
+    const targetWindow = getWindow.peek()(editor);
+    if (targetWindow === null) {
+      return;
     }
+    // Unlike an `<a target="_blank">` the browser follows itself,
+    // `window.open` gives the new page a `window.opener` unless told not
+    // to, and with it that page can navigate this one away.
+    targetWindow.open(url, ...(newTab ? ['_blank', 'noopener'] : ['_self']));
+    event.preventDefault();
   };
 
   return editor.registerRootListener(rootElement => {
     if (rootElement) {
-      rootElement.addEventListener('click', onClick, eventOptions);
-      rootElement.addEventListener('mouseup', onMouseUp, eventOptions);
-      return () => {
-        rootElement.removeEventListener('click', onClick);
-        rootElement.removeEventListener('mouseup', onMouseUp);
-      };
+      // `auxclick` rather than `mouseup`: canceling `mouseup` does not stop
+      // the browser from also opening a middle-clicked link in a new tab, so
+      // handling the middle button there opened the URL twice. Safari below
+      // 18.2 has no `auxclick` at all; there a middle click is left to the
+      // browser, which opens the anchor's href -- already sanitized by
+      // LinkNode, and absent entirely on an unlinked AutoLinkNode -- in a new
+      // tab, for the same result minus the `window.open` call.
+      return registerEventListeners(
+        rootElement,
+        {auxclick: onClick, click: onClick},
+        eventOptions,
+      );
     }
   });
 }
@@ -133,7 +171,11 @@ export const ClickableLinkExtension = defineExtension({
   build(editor, config, state) {
     return namedSignals(config);
   },
-  config: safeCast<ClickableLinkConfig>({disabled: false, newTab: false}),
+  config: safeCast<ClickableLinkConfig>({
+    disabled: false,
+    getWindow: defaultGetWindow,
+    newTab: false,
+  }),
   dependencies: [LinkExtension],
   name: '@lexical/link/ClickableLink',
   register(editor, config, state) {

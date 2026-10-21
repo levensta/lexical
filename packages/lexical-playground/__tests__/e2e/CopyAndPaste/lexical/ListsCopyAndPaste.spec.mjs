@@ -24,17 +24,16 @@ import {
   IS_WINDOWS,
   pasteFromClipboard,
   test,
-  withExclusiveClipboardAccess,
 } from '../../../utils/index.mjs';
+
+test.skip(({isPlainText}) => isPlainText, 'Requires rich text');
 
 test.describe('Lists CopyAndPaste', () => {
   test.beforeEach(({isCollab, page}) => initialize({isCollab, page}));
 
   test('Copy and paste of partial list items into an empty editor', async ({
     page,
-    isPlainText,
   }) => {
-    test.skip(isPlainText);
     await focusEditor(page);
 
     // Add three list items
@@ -88,7 +87,7 @@ test.describe('Lists CopyAndPaste', () => {
       focusPath: [0, 2, 0, 0],
     });
 
-    await withExclusiveClipboardAccess(async () => {
+    {
       // Copy the partial list item and paragraph
       const clipboard = await copyToClipboard(page);
 
@@ -100,7 +99,9 @@ test.describe('Lists CopyAndPaste', () => {
       await assertHTML(
         page,
         html`
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <br data-lexical-managed-linebreak="true" />
+          </p>
         `,
       );
       await assertSelection(page, {
@@ -133,29 +134,79 @@ test.describe('Lists CopyAndPaste', () => {
         focusOffset: 10,
         focusPath: [1, 0, 0],
       });
-    });
+    }
   });
 
-  test(
-    'Copy and paste of partial list items into the list',
-    {tag: '@flaky'},
-    async ({page, isPlainText, isCollab, browserName}) => {
-      test.skip(isPlainText);
+  test('Copy and paste of partial list items into the list', async ({
+    page,
+    browserName,
+  }) => {
+    await focusEditor(page);
 
-      await focusEditor(page);
+    // Add three list items
+    await page.keyboard.type('- one');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('two');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('three');
 
-      // Add three list items
-      await page.keyboard.type('- one');
-      await page.keyboard.press('Enter');
-      await page.keyboard.type('two');
-      await page.keyboard.press('Enter');
-      await page.keyboard.type('three');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
 
-      await page.keyboard.press('Enter');
-      await page.keyboard.press('Enter');
+    // Add a paragraph
+    await page.keyboard.type('Some text.');
 
-      // Add a paragraph
-      await page.keyboard.type('Some text.');
+    await assertHTML(
+      page,
+      html`
+        <ul class="PlaygroundEditorTheme__ul" dir="auto">
+          <li class="PlaygroundEditorTheme__listItem" value="1">
+            <span data-lexical-text="true">one</span>
+          </li>
+          <li class="PlaygroundEditorTheme__listItem" value="2">
+            <span data-lexical-text="true">two</span>
+          </li>
+          <li class="PlaygroundEditorTheme__listItem" value="3">
+            <span data-lexical-text="true">three</span>
+          </li>
+        </ul>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <span data-lexical-text="true">Some text.</span>
+        </p>
+      `,
+    );
+    await assertSelection(page, {
+      anchorOffset: 10,
+      anchorPath: [1, 0, 0],
+      focusOffset: 10,
+      focusPath: [1, 0, 0],
+    });
+
+    await page.keyboard.down('Shift');
+    await moveToLineBeginning(page);
+    await moveLeft(page, 3);
+    await page.keyboard.up('Shift');
+
+    await assertSelection(page, {
+      anchorOffset: 10,
+      anchorPath: [1, 0, 0],
+      focusOffset: 3,
+      focusPath: [0, 2, 0, 0],
+    });
+
+    {
+      // Copy the partial list item and paragraph
+      const clipboard = await copyToClipboard(page);
+
+      // Select all and remove content
+      await page.keyboard.press('ArrowUp');
+      await page.keyboard.press('ArrowUp');
+      if (!IS_WINDOWS && browserName === 'firefox') {
+        await page.keyboard.press('ArrowUp');
+      }
+      await moveToLineEnd(page);
+
+      await page.keyboard.down('Enter');
 
       await assertHTML(
         page,
@@ -165,9 +216,48 @@ test.describe('Lists CopyAndPaste', () => {
               <span data-lexical-text="true">one</span>
             </li>
             <li class="PlaygroundEditorTheme__listItem" value="2">
-              <span data-lexical-text="true">two</span>
+              <br data-lexical-managed-linebreak="true" />
             </li>
             <li class="PlaygroundEditorTheme__listItem" value="3">
+              <span data-lexical-text="true">two</span>
+            </li>
+            <li class="PlaygroundEditorTheme__listItem" value="4">
+              <span data-lexical-text="true">three</span>
+            </li>
+          </ul>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <span data-lexical-text="true">Some text.</span>
+          </p>
+        `,
+      );
+      await assertSelection(page, {
+        anchorOffset: 0,
+        anchorPath: [0, 1],
+        focusOffset: 0,
+        focusPath: [0, 1],
+      });
+
+      await pasteFromClipboard(page, clipboard);
+
+      await assertHTML(
+        page,
+        html`
+          <ul class="PlaygroundEditorTheme__ul" dir="auto">
+            <li class="PlaygroundEditorTheme__listItem" value="1">
+              <span data-lexical-text="true">one</span>
+            </li>
+            <li class="PlaygroundEditorTheme__listItem" value="2">
+              <span data-lexical-text="true">ee</span>
+            </li>
+          </ul>
+          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+            <span data-lexical-text="true">Some text.</span>
+          </p>
+          <ul class="PlaygroundEditorTheme__ul" dir="auto">
+            <li class="PlaygroundEditorTheme__listItem" value="1">
+              <span data-lexical-text="true">two</span>
+            </li>
+            <li class="PlaygroundEditorTheme__listItem" value="2">
               <span data-lexical-text="true">three</span>
             </li>
           </ul>
@@ -182,108 +272,10 @@ test.describe('Lists CopyAndPaste', () => {
         focusOffset: 10,
         focusPath: [1, 0, 0],
       });
+    }
+  });
 
-      await page.keyboard.down('Shift');
-      await moveToLineBeginning(page);
-      await moveLeft(page, 3);
-      await page.keyboard.up('Shift');
-
-      await assertSelection(page, {
-        anchorOffset: 10,
-        anchorPath: [1, 0, 0],
-        focusOffset: 3,
-        focusPath: [0, 2, 0, 0],
-      });
-
-      await withExclusiveClipboardAccess(async () => {
-        // Copy the partial list item and paragraph
-        const clipboard = await copyToClipboard(page);
-
-        // Select all and remove content
-        await page.keyboard.press('ArrowUp');
-        await page.keyboard.press('ArrowUp');
-        if (!IS_WINDOWS && browserName === 'firefox') {
-          await page.keyboard.press('ArrowUp');
-        }
-        await moveToLineEnd(page);
-
-        await page.keyboard.down('Enter');
-
-        await assertHTML(
-          page,
-          html`
-            <ul class="PlaygroundEditorTheme__ul" dir="auto">
-              <li class="PlaygroundEditorTheme__listItem" value="1">
-                <span data-lexical-text="true">one</span>
-              </li>
-              <li class="PlaygroundEditorTheme__listItem" value="2">
-                <br />
-              </li>
-              <li class="PlaygroundEditorTheme__listItem" value="3">
-                <span data-lexical-text="true">two</span>
-              </li>
-              <li class="PlaygroundEditorTheme__listItem" value="4">
-                <span data-lexical-text="true">three</span>
-              </li>
-            </ul>
-            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-              <span data-lexical-text="true">Some text.</span>
-            </p>
-          `,
-        );
-        await assertSelection(page, {
-          anchorOffset: 0,
-          anchorPath: [0, 1],
-          focusOffset: 0,
-          focusPath: [0, 1],
-        });
-
-        await pasteFromClipboard(page, clipboard);
-
-        await assertHTML(
-          page,
-          html`
-            <ul class="PlaygroundEditorTheme__ul" dir="auto">
-              <li class="PlaygroundEditorTheme__listItem" value="1">
-                <span data-lexical-text="true">one</span>
-              </li>
-              <li class="PlaygroundEditorTheme__listItem" value="2">
-                <span data-lexical-text="true">ee</span>
-              </li>
-            </ul>
-            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-              <span data-lexical-text="true">Some text.</span>
-            </p>
-            <ul class="PlaygroundEditorTheme__ul" dir="auto">
-              <li class="PlaygroundEditorTheme__listItem" value="1">
-                <span data-lexical-text="true">two</span>
-              </li>
-              <li class="PlaygroundEditorTheme__listItem" value="2">
-                <span data-lexical-text="true">three</span>
-              </li>
-            </ul>
-            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-              <span data-lexical-text="true">Some text.</span>
-            </p>
-          `,
-        );
-        await assertSelection(page, {
-          anchorOffset: 10,
-          anchorPath: [1, 0, 0],
-          focusOffset: 10,
-          focusPath: [1, 0, 0],
-        });
-      });
-    },
-  );
-
-  test('Copy list items and paste back into list', async ({
-    page,
-    isPlainText,
-    isCollab,
-  }) => {
-    test.skip(isPlainText);
-
+  test('Copy list items and paste back into list', async ({page}) => {
     await focusEditor(page);
 
     await page.keyboard.type('- one');
@@ -334,7 +326,7 @@ test.describe('Lists CopyAndPaste', () => {
       focusPath: [0, 3, 0, 0],
     });
 
-    await withExclusiveClipboardAccess(async () => {
+    {
       const clipboard = await copyToClipboard(page);
 
       await page.keyboard.press('Backspace');
@@ -349,7 +341,9 @@ test.describe('Lists CopyAndPaste', () => {
             <li class="PlaygroundEditorTheme__listItem" value="2">
               <span data-lexical-text="true">two</span>
             </li>
-            <li class="PlaygroundEditorTheme__listItem" value="3"><br /></li>
+            <li class="PlaygroundEditorTheme__listItem" value="3">
+              <br data-lexical-managed-linebreak="true" />
+            </li>
             <li class="PlaygroundEditorTheme__listItem" value="4">
               <span data-lexical-text="true">five</span>
             </li>
@@ -393,62 +387,25 @@ test.describe('Lists CopyAndPaste', () => {
         focusOffset: 4,
         focusPath: [0, 3, 0, 0],
       });
-    });
+    }
   });
 
-  test('Copy list items and paste into list', async ({
-    page,
-    isPlainText,
-    isCollab,
-  }) => {
-    test.fixme(isCollab && IS_LINUX, 'Flaky on Linux + Collab');
-    test.skip(isPlainText);
+  test.describe(() => {
+    test.fixme(({isCollab}) => isCollab && IS_LINUX, 'Flaky on Linux + Collab');
+    test('Copy list items and paste into list', async ({page}) => {
+      await focusEditor(page);
 
-    await focusEditor(page);
-
-    await page.keyboard.type('- one');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('two');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('three');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('four');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('five');
-
-    await selectAll(page);
-
-    await assertHTML(
-      page,
-      html`
-        <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">one</span>
-          </li>
-          <li class="PlaygroundEditorTheme__listItem" value="2">
-            <span data-lexical-text="true">two</span>
-          </li>
-          <li class="PlaygroundEditorTheme__listItem" value="3">
-            <span data-lexical-text="true">three</span>
-          </li>
-          <li class="PlaygroundEditorTheme__listItem" value="4">
-            <span data-lexical-text="true">four</span>
-          </li>
-          <li class="PlaygroundEditorTheme__listItem" value="5">
-            <span data-lexical-text="true">five</span>
-          </li>
-        </ul>
-      `,
-    );
-
-    await withExclusiveClipboardAccess(async () => {
-      const clipboard = await copyToClipboard(page);
-
-      await page.keyboard.press('ArrowDown');
+      await page.keyboard.type('- one');
       await page.keyboard.press('Enter');
+      await page.keyboard.type('two');
       await page.keyboard.press('Enter');
+      await page.keyboard.type('three');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('four');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('five');
 
-      await page.keyboard.type('12345');
+      await selectAll(page);
 
       await assertHTML(
         page,
@@ -470,73 +427,102 @@ test.describe('Lists CopyAndPaste', () => {
               <span data-lexical-text="true">five</span>
             </li>
           </ul>
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-            <span data-lexical-text="true">12345</span>
-          </p>
         `,
       );
 
-      await page.keyboard.press('ArrowLeft');
-      await page.keyboard.press('ArrowLeft');
-      await selectCharacters(page, 'left', 1);
+      {
+        const clipboard = await copyToClipboard(page);
 
-      await pasteFromClipboard(page, clipboard);
+        await page.keyboard.press('ArrowDown');
+        await page.keyboard.press('Enter');
+        await page.keyboard.press('Enter');
 
-      await assertHTML(
-        page,
-        html`
-          <ul class="PlaygroundEditorTheme__ul" dir="auto">
-            <li class="PlaygroundEditorTheme__listItem" value="1">
-              <span data-lexical-text="true">one</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="2">
-              <span data-lexical-text="true">two</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="3">
-              <span data-lexical-text="true">three</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="4">
-              <span data-lexical-text="true">four</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="5">
-              <span data-lexical-text="true">five</span>
-            </li>
-          </ul>
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-            <span data-lexical-text="true">12</span>
-          </p>
-          <ul class="PlaygroundEditorTheme__ul" dir="auto">
-            <li class="PlaygroundEditorTheme__listItem" value="1">
-              <span data-lexical-text="true">one</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="2">
-              <span data-lexical-text="true">two</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="3">
-              <span data-lexical-text="true">three</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="4">
-              <span data-lexical-text="true">four</span>
-            </li>
-            <li class="PlaygroundEditorTheme__listItem" value="5">
-              <span data-lexical-text="true">five</span>
-            </li>
-          </ul>
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-            <span data-lexical-text="true">45</span>
-          </p>
-        `,
-      );
+        await page.keyboard.type('12345');
+
+        await assertHTML(
+          page,
+          html`
+            <ul class="PlaygroundEditorTheme__ul" dir="auto">
+              <li class="PlaygroundEditorTheme__listItem" value="1">
+                <span data-lexical-text="true">one</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="2">
+                <span data-lexical-text="true">two</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="3">
+                <span data-lexical-text="true">three</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="4">
+                <span data-lexical-text="true">four</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="5">
+                <span data-lexical-text="true">five</span>
+              </li>
+            </ul>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <span data-lexical-text="true">12345</span>
+            </p>
+          `,
+        );
+
+        await page.keyboard.press('ArrowLeft');
+        await page.keyboard.press('ArrowLeft');
+        await selectCharacters(page, 'left', 1);
+
+        await pasteFromClipboard(page, clipboard);
+
+        await assertHTML(
+          page,
+          html`
+            <ul class="PlaygroundEditorTheme__ul" dir="auto">
+              <li class="PlaygroundEditorTheme__listItem" value="1">
+                <span data-lexical-text="true">one</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="2">
+                <span data-lexical-text="true">two</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="3">
+                <span data-lexical-text="true">three</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="4">
+                <span data-lexical-text="true">four</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="5">
+                <span data-lexical-text="true">five</span>
+              </li>
+            </ul>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <span data-lexical-text="true">12</span>
+            </p>
+            <ul class="PlaygroundEditorTheme__ul" dir="auto">
+              <li class="PlaygroundEditorTheme__listItem" value="1">
+                <span data-lexical-text="true">one</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="2">
+                <span data-lexical-text="true">two</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="3">
+                <span data-lexical-text="true">three</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="4">
+                <span data-lexical-text="true">four</span>
+              </li>
+              <li class="PlaygroundEditorTheme__listItem" value="5">
+                <span data-lexical-text="true">five</span>
+              </li>
+            </ul>
+            <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+              <span data-lexical-text="true">45</span>
+            </p>
+          `,
+        );
+      }
     });
   });
 
   test('Copy and paste of list items and paste back into list on an existing item', async ({
     page,
-    isPlainText,
-    isCollab,
   }) => {
-    test.skip(isPlainText);
-
     await focusEditor(page);
 
     await page.keyboard.type('- one');
@@ -587,7 +573,7 @@ test.describe('Lists CopyAndPaste', () => {
       focusPath: [0, 3, 0, 0],
     });
 
-    await withExclusiveClipboardAccess(async () => {
+    {
       const clipboard = await copyToClipboard(page);
 
       await page.keyboard.press('ArrowRight');
@@ -657,14 +643,12 @@ test.describe('Lists CopyAndPaste', () => {
         focusOffset: 4,
         focusPath: [0, 5, 0, 0],
       });
-    });
+    }
   });
 
   test('Copy and paste two paragraphs into list on an existing item', async ({
     page,
-    isPlainText,
   }) => {
-    test.skip(isPlainText);
     await focusEditor(page);
 
     await page.keyboard.type('Hello');
@@ -673,7 +657,7 @@ test.describe('Lists CopyAndPaste', () => {
 
     await selectAll(page);
 
-    await withExclusiveClipboardAccess(async () => {
+    {
       const clipboard = await copyToClipboard(page);
 
       await page.keyboard.press('Backspace');
@@ -760,15 +744,10 @@ test.describe('Lists CopyAndPaste', () => {
         focusOffset: 5,
         focusPath: [1, 0, 0],
       });
-    });
+    }
   });
 
-  test('Copy and paste two paragraphs at the end of a list', async ({
-    page,
-    isPlainText,
-  }) => {
-    test.skip(isPlainText);
-
+  test('Copy and paste two paragraphs at the end of a list', async ({page}) => {
     await focusEditor(page);
 
     await page.keyboard.type('Hello');
@@ -777,7 +756,7 @@ test.describe('Lists CopyAndPaste', () => {
 
     await selectAll(page);
 
-    await withExclusiveClipboardAccess(async () => {
+    {
       const clipboard = await copyToClipboard(page);
 
       await page.keyboard.press('Backspace');
@@ -869,6 +848,6 @@ test.describe('Lists CopyAndPaste', () => {
         focusOffset: 5,
         focusPath: [2, 0, 0],
       });
-    });
+    }
   });
 });

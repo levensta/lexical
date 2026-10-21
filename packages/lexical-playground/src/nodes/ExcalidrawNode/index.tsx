@@ -6,25 +6,64 @@
  *
  */
 
-import type {
-  DOMConversionMap,
-  DOMConversionOutput,
-  DOMExportOutput,
-  EditorConfig,
-  LexicalEditor,
-  LexicalNode,
-  NodeKey,
-  SerializedLexicalNode,
-  Spread,
-} from 'lexical';
 import type {JSX} from 'react';
 
-import {DecoratorNode} from 'lexical';
+import {
+  $getDocument,
+  DecoratorNode,
+  type DOMExportOutput,
+  type EditorConfig,
+  enumValue,
+  type LexicalEditor,
+  type LexicalNode,
+  type NodeKey,
+  nodeSchema,
+  numberValue,
+  type SerializedLexicalNode,
+  type Spread,
+  stringValue,
+  unionValue,
+  withAccessors,
+  withField,
+} from 'lexical';
 import * as React from 'react';
 
 type Dimension = number | 'inherit';
 
 const ExcalidrawComponent = React.lazy(() => import('./ExcalidrawComponent'));
+
+/**
+ * `Dimension` is `number | 'inherit'`, so width/height are described with
+ * {@link unionValue}. This also closes a hole in the previous
+ * `serializedNode.width ?? 'inherit'` parsing, which stored any non-nullish
+ * value (including a string like `'banana'`) verbatim.
+ *
+ * Left uninferred rather than annotated `SerializationSchema<Dimension>`: what
+ * it *accepts* is wider than what it parses to, since `numberValue` also reads
+ * a stringified number, and annotating the output type alone would claim
+ * otherwise.
+ */
+const dimensionSchema = unionValue(
+  [numberValue(), enumValue(['inherit'])],
+  'inherit',
+);
+
+const excalidrawNodeSchema = nodeSchema<ExcalidrawNode>()({
+  // '[]' is the empty-scene default the constructor uses; an absent or
+  // out-of-domain `data` must not become '' (JSON.parse('') throws).
+  // `setData` is a bare field write, so this property *is* `__data` in both
+  // directions; naming the setter keeps a subclass that overrides it in
+  // charge. `width`/`height` below cannot be declared this way — see there.
+  data: withField(stringValue('[]'), {field: '__data', setter: 'setData'}),
+  // Not `withField`: the field holds the `'inherit'` sentinel, which has
+  // never been serialized (`width?: Dimension` is optional), so the getter
+  // maps it to `undefined` to omit the property. Reading the field directly
+  // would start writing `"width":"inherit"`. A `decode` table cannot express
+  // it either — the stored domain is open, so a table miss would omit every
+  // real width along with the sentinel.
+  height: withAccessors(dimensionSchema, {getter: 'getSerializedHeight'}),
+  width: withAccessors(dimensionSchema, {getter: 'getSerializedWidth'}),
+});
 
 export type SerializedExcalidrawNode = Spread<
   {
@@ -35,60 +74,26 @@ export type SerializedExcalidrawNode = Spread<
   SerializedLexicalNode
 >;
 
-function $convertExcalidrawElement(
-  domNode: HTMLElement,
-): DOMConversionOutput | null {
-  const excalidrawData = domNode.getAttribute('data-lexical-excalidraw-json');
-  const styleAttributes = window.getComputedStyle(domNode);
-  const heightStr = styleAttributes.getPropertyValue('height');
-  const widthStr = styleAttributes.getPropertyValue('width');
-  const height =
-    !heightStr || heightStr === 'inherit' ? 'inherit' : parseInt(heightStr, 10);
-  const width =
-    !widthStr || widthStr === 'inherit' ? 'inherit' : parseInt(widthStr, 10);
-
-  if (excalidrawData) {
-    const node = $createExcalidrawNode(excalidrawData, width, height);
-    return {
-      node,
-    };
-  }
-  return null;
-}
-
 export class ExcalidrawNode extends DecoratorNode<JSX.Element> {
   __data: string;
   __width: Dimension;
   __height: Dimension;
 
-  static getType(): string {
-    return 'excalidraw';
+  $config() {
+    return this.config('excalidraw', {
+      extends: DecoratorNode,
+      json: excalidrawNodeSchema,
+    });
   }
 
-  static clone(node: ExcalidrawNode): ExcalidrawNode {
-    return new ExcalidrawNode(
-      node.__data,
-      node.__width,
-      node.__height,
-      node.__key,
-    );
-  }
-
-  static importJSON(serializedNode: SerializedExcalidrawNode): ExcalidrawNode {
-    return new ExcalidrawNode(
-      serializedNode.data,
-      serializedNode.width ?? 'inherit',
-      serializedNode.height ?? 'inherit',
-    ).updateFromJSON(serializedNode);
-  }
-
-  exportJSON(): SerializedExcalidrawNode {
-    return {
-      ...super.exportJSON(),
-      data: this.__data,
-      height: this.__height === 'inherit' ? undefined : this.__height,
-      width: this.__width === 'inherit' ? undefined : this.__width,
-    };
+  // Every constructor argument has a default, so `$config` synthesizes the
+  // static `clone` as `new ExcalidrawNode()` — the drawing and its dimensions
+  // have to be carried over here or every `getWritable()` resets them.
+  afterCloneFrom(prevNode: this): void {
+    super.afterCloneFrom(prevNode);
+    this.__data = prevNode.__data;
+    this.__width = prevNode.__width;
+    this.__height = prevNode.__height;
   }
 
   constructor(
@@ -105,7 +110,7 @@ export class ExcalidrawNode extends DecoratorNode<JSX.Element> {
 
   // View
   createDOM(config: EditorConfig): HTMLElement {
-    const span = document.createElement('span');
+    const span = $getDocument().createElement('span');
     const theme = config.theme;
     const className = theme.image;
     if (className !== undefined) {
@@ -118,22 +123,8 @@ export class ExcalidrawNode extends DecoratorNode<JSX.Element> {
     return false;
   }
 
-  static importDOM(): DOMConversionMap<HTMLSpanElement> | null {
-    return {
-      span: (domNode: HTMLSpanElement) => {
-        if (!domNode.hasAttribute('data-lexical-excalidraw-json')) {
-          return null;
-        }
-        return {
-          conversion: $convertExcalidrawElement,
-          priority: 1,
-        };
-      },
-    };
-  }
-
   exportDOM(editor: LexicalEditor): DOMExportOutput {
-    const element = document.createElement('span');
+    const element = $getDocument().createElement('span');
 
     element.style.display = 'inline-block';
 
@@ -152,6 +143,18 @@ export class ExcalidrawNode extends DecoratorNode<JSX.Element> {
 
     element.setAttribute('data-lexical-excalidraw-json', this.__data);
     return {element};
+  }
+
+  /** @internal The 'inherit' sentinel is omitted from the JSON. */
+  getSerializedWidth(): number | undefined {
+    const width = this.getWidth();
+    return width === 'inherit' ? undefined : width;
+  }
+
+  /** @internal */
+  getSerializedHeight(): number | undefined {
+    const height = this.getHeight();
+    return height === 'inherit' ? undefined : height;
   }
 
   setData(data: string): this {

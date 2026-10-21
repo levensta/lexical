@@ -26,11 +26,11 @@ import {
   test,
 } from '../utils/index.mjs';
 
+test.skip(({isPlainText}) => isPlainText, 'Requires rich text');
+
 test.describe('HTML', () => {
   test.beforeEach(({isCollab, page}) => initialize({isCollab, page}));
-  test(`Can export HTML using the button`, async ({page, isPlainText}) => {
-    test.skip(isPlainText);
-
+  test(`Can export HTML using the button`, async ({page}) => {
     await focusEditor(page);
     await page.keyboard.type('Foo');
     await applyHeading(page, 1);
@@ -51,29 +51,8 @@ test.describe('HTML', () => {
         class="PlaygroundEditorTheme__code"
         dir="auto"
         spellcheck="false"
-        data-gutter="*"
-        data-highlight-language="javascript"
-        data-language="javascript">
-        <span class="PlaygroundEditorTheme__tokenAttr" data-lexical-text="true">
-          const
-        </span>
-        <span data-lexical-text="true">x</span>
-        <span
-          class="PlaygroundEditorTheme__tokenOperator"
-          data-lexical-text="true">
-          =
-        </span>
-        <span data-lexical-text="true"></span>
-        <span
-          class="PlaygroundEditorTheme__tokenSelector"
-          data-lexical-text="true">
-          "hello world"
-        </span>
-        <span
-          class="PlaygroundEditorTheme__tokenPunctuation"
-          data-lexical-text="true">
-          ;
-        </span>
+        data-gutter="*">
+        <span data-lexical-text="true">const x = "hello world";</span>
       </code>
       <p class="PlaygroundEditorTheme__paragraph" dir="auto">
         <span data-lexical-text="true">Today</span>
@@ -83,7 +62,7 @@ test.describe('HTML', () => {
           data-lexical-decorator="true">
           <div class="dateTimePill bold italic">*</div>
         </span>
-        <br />
+        <br data-lexical-managed-linebreak="true" />
       </p>
     `;
     await await assertHTML(
@@ -144,9 +123,7 @@ test.describe('HTML', () => {
     );
   });
 
-  test(`Can import HTML using the button`, async ({page, isPlainText}) => {
-    test.skip(isPlainText);
-
+  test(`Can import HTML using the button`, async ({page}) => {
     await focusEditor(page);
     await click(page, '.action-button .html');
 
@@ -192,31 +169,8 @@ test.describe('HTML', () => {
           class="PlaygroundEditorTheme__code"
           dir="auto"
           spellcheck="false"
-          data-gutter="*"
-          data-highlight-language="javascript"
-          data-language="javascript">
-          <span
-            class="PlaygroundEditorTheme__tokenAttr"
-            data-lexical-text="true">
-            const
-          </span>
-          <span data-lexical-text="true">x</span>
-          <span
-            class="PlaygroundEditorTheme__tokenOperator"
-            data-lexical-text="true">
-            =
-          </span>
-          <span data-lexical-text="true"></span>
-          <span
-            class="PlaygroundEditorTheme__tokenSelector"
-            data-lexical-text="true">
-            "hello world"
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            ;
-          </span>
+          data-gutter="*">
+          <span data-lexical-text="true">const x = "hello world";</span>
         </code>
         <p class="PlaygroundEditorTheme__paragraph" dir="auto">
           <span data-lexical-text="true">Hello</span>
@@ -234,12 +188,7 @@ test.describe('HTML', () => {
     );
   });
 
-  test(`Formats a terse HTML export with prettier`, async ({
-    page,
-    isPlainText,
-  }) => {
-    test.skip(isPlainText);
-
+  test(`Formats a terse HTML export with prettier`, async ({page}) => {
     await focusEditor(page);
     await applyHeading(page, 1);
     await page.keyboard.type('Foo');
@@ -264,46 +213,48 @@ test.describe('HTML', () => {
     }).toPass({intervals: [100, 250, 500], timeout: 5000});
   });
 
-  test(`Can switch from Pages mode`, async ({page, isPlainText, isCollab}) => {
-    test.skip(isPlainText || isCollab);
-    await focusEditor(page);
-    // Ensure we're in pageless mode
-    await page.waitForSelector(
-      '.ContentEditable__root > .PlaygroundEditorTheme__paragraph',
-    );
-    await applyHeading(page, 1);
-    await page.keyboard.type('Foo');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('Hello world');
+  test.describe(() => {
+    test.skip(({isCollab}) => isCollab);
+    test(`Can switch from Pages mode`, async ({page}) => {
+      await focusEditor(page);
+      // Ensure we're in pageless mode
+      await page.waitForSelector(
+        '.ContentEditable__root > .PlaygroundEditorTheme__paragraph',
+      );
+      await applyHeading(page, 1);
+      await page.keyboard.type('Foo');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Hello world');
 
-    await click(page, '.page-setup');
-    const btn = page.getByRole('button', {name: /^Statement /});
-    await expect(btn).toBeVisible();
-    await btn.click();
-    // Ensure we're in page mode
-    await page.waitForSelector(
-      '.ContentEditable__root > .PlaygroundEditorTheme__page > .PlaygroundEditorTheme__pageContent',
-    );
-    await click(page, '.action-button .html');
+      await click(page, '.page-setup');
+      const btn = page.getByRole('button', {name: /^Statement /});
+      await expect(btn).toBeVisible();
+      await btn.click();
+      // Ensure we're in page mode
+      await page.waitForSelector(
+        '.ContentEditable__root > .PlaygroundEditorTheme__page > .PlaygroundEditorTheme__pageContent',
+      );
+      await click(page, '.action-button .html');
 
-    const expectedPrettyHtml = [
-      '<h1><span>Foo</span></h1>',
-      '<p><span>Hello world</span></p>',
-    ].join('\n');
-    await expect(async () => {
-      const codeText = await evaluate(page, () => {
-        const editor = window.lexicalEditor;
-        return window.lexicalEditor.read(() =>
-          editor.getEditorState()._nodeMap.get('root').getTextContent(),
-        );
-      });
-      expect(codeText).toBe(expectedPrettyHtml);
-    }).toPass({intervals: [100, 250, 500], timeout: 5000});
+      const expectedPrettyHtml = [
+        '<h1><span>Foo</span></h1>',
+        '<p><span>Hello world</span></p>',
+      ].join('\n');
+      await expect(async () => {
+        const codeText = await evaluate(page, () => {
+          const editor = window.lexicalEditor;
+          return window.lexicalEditor.read(() =>
+            editor.getEditorState()._nodeMap.get('root').getTextContent(),
+          );
+        });
+        expect(codeText).toBe(expectedPrettyHtml);
+      }).toPass({intervals: [100, 250, 500], timeout: 5000});
 
-    await click(page, '.action-button .html');
-    // Ensure we're in page mode
-    await page.waitForSelector(
-      '.ContentEditable__root > .PlaygroundEditorTheme__page > .PlaygroundEditorTheme__pageContent',
-    );
+      await click(page, '.action-button .html');
+      // Ensure we're in page mode
+      await page.waitForSelector(
+        '.ContentEditable__root > .PlaygroundEditorTheme__page > .PlaygroundEditorTheme__pageContent',
+      );
+    });
   });
 });

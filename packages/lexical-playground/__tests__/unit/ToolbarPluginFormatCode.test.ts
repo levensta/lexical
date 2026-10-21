@@ -6,6 +6,8 @@
  *
  */
 
+// @vitest-environment node
+
 import {CodeNode} from '@lexical/code';
 import {buildEditorFromExtensions} from '@lexical/extension';
 import {$createHeadingNode, RichTextExtension} from '@lexical/rich-text';
@@ -96,6 +98,14 @@ describe('formatCode (Toolbar) — selection-aware code block conversion', () =>
       expected: 'code:Heading',
       headingTag: 'h1' as const,
       name: 'full from offset 0 (regression for #8446 crash)',
+      start: 0,
+      text: 'Heading',
+    },
+    {
+      end: 'Head'.length,
+      expected: 'code:Head|paragraph:ing',
+      headingTag: 'h1' as const,
+      name: 'partial from offset 0 (regression for detached firstBlock)',
       start: 0,
       text: 'Heading',
     },

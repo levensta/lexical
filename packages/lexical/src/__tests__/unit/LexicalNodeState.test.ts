@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  *
  */
-
 import {
   $copyNode,
+  $create,
   $createParagraphNode,
   $createTextNode,
   $getRoot,
@@ -15,18 +15,23 @@ import {
   $getStateChange,
   $isParagraphNode,
   $setState,
+  createEditor,
   createState,
-  LexicalExportJSON,
+  ElementNode,
+  type LexicalExportJSON,
+  NODE_STATE_DIRECT,
   NODE_STATE_KEY,
   type NodeStateJSON,
   ParagraphNode,
-  RootNode,
-  StateValueOrUpdater,
+  type RootNode,
+  type SerializedElementNode,
+  type SerializedLexicalNode,
+  type StateValueOrUpdater,
 } from 'lexical';
-import {beforeEach, describe, expect, test} from 'vitest';
+import {beforeEach, describe, expect, expectTypeOf, test} from 'vitest';
 
 import {nodeStatesAreEquivalent} from '../../LexicalNodeState';
-import {initializeUnitTest, invariant} from '../utils';
+import {$assertNodeType, initializeUnitTest, invariant} from '../utils';
 import {TestNode} from './LexicalNode.test';
 
 // https://www.totaltypescript.com/how-to-test-your-types
@@ -85,6 +90,7 @@ type _TestStateNodeExportJSON = Expect<
             boolState?: boolean | undefined;
           })
         | undefined;
+      $slots?: Record<string, SerializedLexicalNode>;
       version: number;
       type: 'state';
       numberState?: number | undefined;
@@ -102,6 +108,7 @@ type _TestExtraStateNodeExportJSON = Expect<
             boolState?: boolean | undefined;
           })
         | undefined;
+      $slots?: Record<string, SerializedLexicalNode>;
       version: number;
       type: 'extra-state';
       numberState?: number | undefined;
@@ -112,6 +119,64 @@ type _TestExtraStateNodeExportJSON = Expect<
 
 function $createStateNode() {
   return new StateNode();
+}
+
+// ===========================================================================
+// Interleaved abstract/concrete $config hierarchy:
+//   ElementNode -> InterleaveParagraph (concrete) -> InterleaveAbstract
+//   (abstract, Symbol-keyed) -> InterleaveConcrete (concrete)
+// A required flat state is declared at each level below ElementNode, and the
+// abstract base also registers a $transform. Before the accessor-based config
+// fix:
+//   - InterleaveAbstract.$config did not type-check as an override of the
+//     accessor-bearing InterleaveParagraph.$config, and
+//   - NodeStateJSON<InterleaveConcrete> truncated at the Symbol-keyed base to
+//     just {icState}, dropping iaState and ipState even though the runtime
+//     registered and serialized all three.
+// ===========================================================================
+const ipState = createState('ipState', {
+  parse: v => (typeof v === 'number' ? v : 0),
+});
+const iaState = createState('iaState', {
+  parse: v => (typeof v === 'number' ? v : 0),
+});
+const icState = createState('icState', {
+  parse: v => (typeof v === 'number' ? v : 0),
+});
+const interleaveTransforms: string[] = [];
+
+class InterleaveParagraph extends ElementNode {
+  $config() {
+    return this.config('interleave-paragraph', {
+      extends: ElementNode,
+      stateConfigs: [{flat: true, stateConfig: ipState}],
+    });
+  }
+  createDOM(): HTMLElement {
+    return document.createElement('div');
+  }
+  updateDOM(): false {
+    return false;
+  }
+}
+class InterleaveAbstract extends InterleaveParagraph {
+  $config() {
+    return this.config(Symbol.for('InterleaveAbstract'), {
+      $transform: (node: InterleaveAbstract) => {
+        interleaveTransforms.push(node.getType());
+      },
+      extends: InterleaveParagraph,
+      stateConfigs: [{flat: true, stateConfig: iaState}],
+    });
+  }
+}
+class InterleaveConcrete extends InterleaveAbstract {
+  $config() {
+    return this.config('interleave-concrete', {
+      extends: InterleaveAbstract,
+      stateConfigs: [{flat: true, stateConfig: icState}],
+    });
+  }
 }
 
 describe('LexicalNode state', () => {
@@ -198,6 +263,31 @@ describe('LexicalNode state', () => {
         });
       });
 
+      test('importJSON ignores prototype-polluting state keys', () => {
+        const {editor} = testEnv;
+        editor.update(() => {
+          // `__proto__` is only an own enumerable key when produced by
+          // JSON.parse; an object literal would invoke the setter instead.
+          const malicious = JSON.parse(
+            `{"type":"paragraph","version":1,"${NODE_STATE_KEY}":{"__proto__":{"injectedKey":"evil"}}}`,
+          );
+          const paragraph = ParagraphNode.importJSON(malicious);
+          // The global prototype is untouched.
+          expect(({} as Record<string, unknown>).injectedKey).toBeUndefined();
+          expect(Object.prototype).not.toHaveProperty('injectedKey');
+          // The smuggled `__proto__` must not re-parent the state record:
+          // because getValue resolves keys with the `in` operator (which walks
+          // the prototype chain), an unguarded merge would let it inject this
+          // value. Reading the matching key must return the default instead.
+          const injectedState = createState('injectedKey', {
+            parse: v => (typeof v === 'string' ? v : 'default'),
+          });
+          expect($getState(paragraph, injectedState)).toBe('default');
+          // The dangerous key is dropped, so no node state is emitted.
+          expect(paragraph.exportJSON()).not.toHaveProperty(NODE_STATE_KEY);
+        });
+      });
+
       test('states cannot be registered with the same key string', () => {
         const {editor} = testEnv;
         editor.update(
@@ -263,6 +353,33 @@ describe('LexicalNode state', () => {
             expect($getState(node, boolState)).toBe(true);
             expect($getState(node, numberState)).toBe(2);
           }
+        });
+      });
+
+      test('an absent flat key leaves the nested value alone', () => {
+        // The reason the flat pass tests for presence at all rather than
+        // parsing every key: `$updateStateFromJSON` applies the nested `$`
+        // blob first, and this runs over it. Parsing an absent flat key to
+        // its default would overwrite what the blob supplied, so a document
+        // that spells a flat-capable state the nested way would lose it —
+        // which is what the round-trip above reads back through `nestedJSON`,
+        // stated here as the rule it follows from.
+        const {editor} = testEnv;
+        editor.update(() => {
+          const node = StateNode.importJSON({
+            [NODE_STATE_KEY]: {numberState: 7},
+            type: 'state',
+            version: 1,
+          });
+          expect($getState(node, numberState)).toBe(7);
+          // And a flat key that *is* present wins over the blob's value.
+          const both = StateNode.importJSON({
+            [NODE_STATE_KEY]: {numberState: 7},
+            numberState: 9,
+            type: 'state',
+            version: 1,
+          });
+          expect($getState(both, numberState)).toBe(9);
         });
       });
 
@@ -358,7 +475,7 @@ describe('LexicalNode state', () => {
             expect(v1.is(v0)).toBe(true);
             // This is testing getLatest()
             expect($getState(v0, vk)).toBe(1);
-            expect($getState(v0, vk, 'direct')).toBe(0);
+            expect($getState(v0, vk, NODE_STATE_DIRECT)).toBe(0);
             expect($getState(v1, vk)).toBe(1);
             expect($getStateChange(v1, v0, vk)).toEqual([1, 0]);
           },
@@ -377,11 +494,15 @@ describe('LexicalNode state', () => {
             return f();
           },
         };
-        expect(noState.read(() => $getState(initialRoot, vk, 'direct'))).toBe(
-          null,
+        expect(
+          noState.read(() => $getState(initialRoot, vk, NODE_STATE_DIRECT)),
+        ).toBe(null);
+        expect(noState.read(() => $getState(v0, vk, NODE_STATE_DIRECT))).toBe(
+          0,
         );
-        expect(noState.read(() => $getState(v0, vk, 'direct'))).toBe(0);
-        expect(noState.read(() => $getState(v1, vk, 'direct'))).toBe(1);
+        expect(noState.read(() => $getState(v1, vk, NODE_STATE_DIRECT))).toBe(
+          1,
+        );
       });
       describe('nodeStatesAreEquivalent', () => {
         test('undefined states are equivalent', () => {
@@ -412,8 +533,10 @@ describe('LexicalNode state', () => {
           // Revert to default value for number state.
           editor.update(
             () => {
-              const paragraph =
-                $getRoot().getFirstChildOrThrow<ParagraphNode>();
+              const paragraph = $assertNodeType(
+                $getRoot().getFirstChild(),
+                $isParagraphNode,
+              );
               const [firstTextNode] = paragraph.getChildren();
               $setState(firstTextNode, numberState, 0);
             },
@@ -518,7 +641,7 @@ describe('LexicalNode state', () => {
               expect(v1.is(v0)).toBe(true);
               // This is testing getLatest()
               expect($getState(v0, vk)).toBe(1);
-              expect($getState(v0, vk, 'direct')).toBe(0);
+              expect($getState(v0, vk, NODE_STATE_DIRECT)).toBe(0);
               expect($getState(v1, vk)).toBe(1);
               expect($getStateChange(v1, v0, vk)).toEqual([1, 0]);
             },
@@ -702,4 +825,284 @@ describe('LexicalNode state', () => {
       theme: {},
     },
   );
+});
+
+describe('$config interleaved abstract/concrete classes', () => {
+  test('serializes, transforms, and types every interleaved level’s state', () => {
+    interleaveTransforms.length = 0;
+    const editor = createEditor({
+      nodes: [InterleaveConcrete],
+      onError: err => {
+        throw err;
+      },
+    });
+    editor.update(
+      () => {
+        const node = $setState(
+          $setState(
+            $setState($create(InterleaveConcrete), ipState, 1),
+            iaState,
+            2,
+          ),
+          icState,
+          3,
+        );
+        $getRoot().append(node);
+        const json = node.exportJSON();
+
+        // Value: every interleaved level's flat state was serialized — the
+        // concrete ancestor's (ipState), the Symbol-keyed abstract base's
+        // (iaState) and the concrete leaf's (icState).
+        expect(json).toMatchObject({
+          iaState: 2,
+          icState: 3,
+          ipState: 1,
+          type: 'interleave-concrete',
+        });
+
+        // Type: exportJSON()'s return stays the generic serialized type (it must,
+        // to remain compatible with subclassing) — the precise per-node JSON is
+        // described by NodeStateJSON, which now collects every interleaved
+        // level's flat state. Before the fix this truncated at the Symbol-keyed
+        // base to just {icState}.
+        expectTypeOf(json).toEqualTypeOf<SerializedElementNode>();
+        expectTypeOf<
+          keyof Omit<NodeStateJSON<InterleaveConcrete>, typeof NODE_STATE_KEY>
+        >().toEqualTypeOf<'ipState' | 'iaState' | 'icState'>();
+        expectTypeOf<
+          NodeStateJSON<InterleaveConcrete>['ipState']
+        >().toEqualTypeOf<number | undefined>();
+        expectTypeOf<
+          NodeStateJSON<InterleaveConcrete>['iaState']
+        >().toEqualTypeOf<number | undefined>();
+        expectTypeOf<
+          NodeStateJSON<InterleaveConcrete>['icState']
+        >().toEqualTypeOf<number | undefined>();
+      },
+      {discrete: true},
+    );
+    // The abstract base's $transform ran for the concrete leaf (transforms fire
+    // during reconciliation once the node is part of the document).
+    expect(interleaveTransforms).toContain('interleave-concrete');
+  });
+});
+
+describe('flat NodeState through a node replacement', () => {
+  const replacedFlatState = createState('replacedFlatKey', {
+    parse: v => (typeof v === 'string' ? v : ''),
+  });
+
+  class FlatParagraph extends ParagraphNode {
+    $config() {
+      return this.config('flat-paragraph', {
+        extends: ParagraphNode,
+        stateConfigs: [{flat: true, stateConfig: replacedFlatState}],
+      });
+    }
+  }
+
+  // A replacement class that reuses the replaced class's type — the only shape
+  // in which the RegisteredNode for a live node's type could come from the
+  // `replace` entry rather than from the subclass's own registration.
+  class SameTypeParagraph extends ParagraphNode {
+    $config() {
+      return this.config('paragraph', {
+        extends: ParagraphNode,
+        stateConfigs: [{flat: true, stateConfig: replacedFlatState}],
+      });
+    }
+  }
+
+  test('the subclass writes and reads its own flat state top-level', () => {
+    // Flat state is applied on import from the composed schema of
+    // `node.constructor`, but written on export from the SharedNodeState the
+    // node's *type* is registered with. Those agree here because a replacement
+    // class is registered under its own type: the two directions cannot drift.
+    const editor = createEditor({
+      namespace: '',
+      nodes: [
+        FlatParagraph,
+        {
+          replace: ParagraphNode,
+          with: () => new FlatParagraph(),
+          withKlass: FlatParagraph,
+        },
+      ],
+      onError: err => {
+        throw err;
+      },
+    });
+    editor.update(
+      () => {
+        const p = $createParagraphNode();
+        expect(p).toBeInstanceOf(FlatParagraph);
+        expect(p.getType()).toBe('flat-paragraph');
+        $getRoot()
+          .clear()
+          .append(p.append($createTextNode('x')));
+        $setState(p, replacedFlatState, 'hello');
+      },
+      {discrete: true},
+    );
+
+    const json = editor.getEditorState().toJSON();
+    const exported = json.root.children[0];
+    // written top-level, not nested under the NodeState key
+    expect(exported).toMatchObject({replacedFlatKey: 'hello'});
+    expect(exported[NODE_STATE_KEY]).toBeUndefined();
+
+    const reparsed = editor.parseEditorState(JSON.stringify(json));
+    expect(
+      reparsed.read(() =>
+        $getState($getRoot().getFirstChildOrThrow(), replacedFlatState),
+      ),
+    ).toBe('hello');
+  });
+
+  test('withKlass must itself be registered', () => {
+    const editor = createEditor({
+      namespace: '',
+      nodes: [
+        {
+          replace: ParagraphNode,
+          with: () => new FlatParagraph(),
+          withKlass: FlatParagraph,
+        },
+      ],
+      onError: err => {
+        throw err;
+      },
+    });
+    expect(() =>
+      editor.update(() => void $createParagraphNode(), {discrete: true}),
+    ).toThrow(/not configured to be used on the editor/);
+  });
+
+  test('a replacement class cannot reuse the replaced type', () => {
+    const editor = createEditor({
+      namespace: '',
+      nodes: [
+        {
+          replace: ParagraphNode,
+          with: () => new SameTypeParagraph(),
+          withKlass: SameTypeParagraph,
+        },
+      ],
+      onError: err => {
+        throw err;
+      },
+    });
+    expect(() =>
+      editor.update(() => void $createParagraphNode(), {discrete: true}),
+    ).toThrow(/does not match registered node ParagraphNode/);
+  });
+});
+
+describe('importJSON applies state to the node it just built', () => {
+  // importJSON constructs the node itself, so it skips the getWritable() that
+  // updateFromJSON opens with — $setNodeKey already made that node the
+  // writable latest. What must not be skipped is the state itself.
+  const flatKey = createState('importFlatKey', {
+    parse: v => (typeof v === 'string' ? v : ''),
+  });
+  const directKey = createState('importDirectKey', {
+    parse: v => (typeof v === 'number' ? v : 0),
+  });
+
+  class StatefulParagraph extends ParagraphNode {
+    $config() {
+      return this.config('stateful-paragraph', {
+        extends: ParagraphNode,
+        stateConfigs: [{flat: true, stateConfig: flatKey}],
+      });
+    }
+  }
+
+  function editorWith() {
+    return createEditor({
+      namespace: '',
+      nodes: [StatefulParagraph],
+      onError: err => {
+        throw err;
+      },
+    });
+  }
+
+  test('both flat and nested state survive a round trip through importJSON', () => {
+    const editor = editorWith();
+    editor.update(
+      () => {
+        const p = $create(StatefulParagraph);
+        $getRoot()
+          .clear()
+          .append(p.append($createTextNode('x')));
+        $setState(p, flatKey, 'flat-value');
+        $setState(p, directKey, 42);
+      },
+      {discrete: true},
+    );
+    const json = JSON.stringify(editor.getEditorState().toJSON());
+    const reparsed = editor.parseEditorState(json);
+    reparsed.read(() => {
+      const p = $getRoot().getFirstChildOrThrow();
+      // The flat one comes back through the compiled schema, the nested one
+      // through $updateStateFromJSON — the branch importJSON only takes when
+      // the JSON actually carries state.
+      expect($getState(p, flatKey)).toBe('flat-value');
+      expect($getState(p, directKey)).toBe(42);
+    });
+  });
+
+  test('a node whose JSON carries no state still imports its own properties', () => {
+    const editor = editorWith();
+    editor.update(
+      () => {
+        const p = $create(StatefulParagraph);
+        $getRoot()
+          .clear()
+          .append(p.append($createTextNode('hello')));
+        p.setIndent(2);
+      },
+      {discrete: true},
+    );
+    const json = JSON.stringify(editor.getEditorState().toJSON());
+    expect(json).not.toContain(NODE_STATE_KEY);
+    const reparsed = editor.parseEditorState(json);
+    reparsed.read(() => {
+      const p = $getRoot().getFirstChildOrThrow();
+      invariant($isParagraphNode(p), 'expected a paragraph');
+      expect(p.getIndent()).toBe(2);
+      expect(p.getTextContent()).toBe('hello');
+      expect($getState(p, flatKey)).toBe('');
+    });
+  });
+
+  test('the node importJSON returns is writable, so its properties stick', () => {
+    // If the skipped getWritable() had been load-bearing, the writes would
+    // land on a stale version and the reconciled state would not see them.
+    const editor = editorWith();
+    editor.update(
+      () => {
+        const node = ParagraphNode.importJSON({
+          children: [],
+          direction: null,
+          format: '',
+          indent: 3,
+          type: 'paragraph',
+          version: 1,
+        });
+        invariant($isParagraphNode(node), 'expected a paragraph');
+        $getRoot()
+          .clear()
+          .append(node.append($createTextNode('y')));
+      },
+      {discrete: true},
+    );
+    editor.read(() => {
+      const p = $getRoot().getFirstChildOrThrow();
+      invariant($isParagraphNode(p), 'expected a paragraph');
+      expect(p.getIndent()).toBe(3);
+      expect(p.getTextContent()).toBe('y');
+    });
+  });
 });

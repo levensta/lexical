@@ -17,20 +17,22 @@ import {
   $getSelection,
   $getStateChange,
   $isRangeSelection,
+  $onUpdate,
   $setSelection,
   COMMAND_PRIORITY_LOW,
   defineExtension,
   DELETE_CHARACTER_COMMAND,
   HISTORY_MERGE_TAG,
   mergeRegister,
-  NodeKey,
+  type NodeKey,
+  registerEventListeners,
   RootNode,
   safeCast,
   SELECTION_CHANGE_COMMAND,
   SKIP_SCROLL_INTO_VIEW_TAG,
 } from 'lexical';
 
-import {$isPageBreakNode, PageBreakNode} from '../../nodes/PageBreakNode';
+import {$isPageBreakNode, type PageBreakNode} from '../../nodes/PageBreakNode';
 import {PageBreakExtension} from '../PageBreakExtension';
 import {PAGE_SIZES} from './constants';
 import {
@@ -49,7 +51,7 @@ export interface PagesConfig {
 
 export const PagesExtension = defineExtension({
   build: (editor, config) => {
-    const getPageSetup = () => editor.getEditorState().read($getPageSetup);
+    const getPageSetup = () => editor.read('latest', $getPageSetup);
 
     return {
       ...namedSignals({disabled: config.disabled}),
@@ -174,8 +176,14 @@ export const PagesExtension = defineExtension({
         const children = contentNode.getChildren();
         const childNodes = Array.from(contentElement.childNodes);
         if (children.length !== childNodes.length) {
-          childNodes.forEach(childNode => childNode.remove());
-          contentNode.reconcileObservedMutation(contentElement, editor);
+          // Measure this update's children, which may still be rendered on
+          // another page.
+          contentElement.replaceChildren(
+            ...children.flatMap(child => {
+              const dom = editor.getElementByKey(child.getKey());
+              return dom ? [dom] : [];
+            }),
+          );
           return $getOverflowingChildren(node);
         }
         pageElement.style.minHeight = 'unset';
@@ -287,7 +295,7 @@ export const PagesExtension = defineExtension({
       // the corresponding CSS custom properties to the root element, or removes
       // them when paged mode is disabled.
       const updatePageDimensions = () => {
-        editor.getEditorState().read(() => {
+        editor.read('latest', () => {
           const pageSetup = $getPageSetup();
           const rootElement = editor.getRootElement();
           if (!rootElement) return;
@@ -354,7 +362,7 @@ export const PagesExtension = defineExtension({
           () => {
             const root = $getRoot();
             const children = root.getChildren();
-            const pages = [] as Array<PageNode | PageBreakNode>;
+            const pages = [] as (PageNode | PageBreakNode)[];
             for (const child of children) {
               if ($isPageNode(child) || $isPageBreakNode(child)) {
                 if ($isPageNode(child)) {
@@ -578,34 +586,40 @@ export const PagesExtension = defineExtension({
             editor.registerCommand(
               SELECTION_CHANGE_COMMAND,
               () => {
-                const pageSetup = $getPageSetup();
-                if (!pageSetup) return false;
-                const selection = $getSelection();
-                if (!$isRangeSelection(selection)) return false;
-                const anchorNode = selection.anchor.getNode();
-                const nearestRoot =
-                  anchorNode.getKey() === 'root'
-                    ? anchorNode
-                    : $getNearestRootOrShadowRoot(anchorNode);
-                if (!$isPageContentNode(nearestRoot)) return false;
-                const currentPage = nearestRoot.getPageNode();
-                const currentPageKey = currentPage.getKey();
-                const oldPreviousPageKey = previousPageKey;
-                const pageContentElement = currentPage.getPageContentElement();
-                if (!pageContentElement) return false;
-                previousPageKey = currentPageKey;
-                pageObserver.observe(pageContentElement);
-                if (
-                  oldPreviousPageKey === null ||
-                  oldPreviousPageKey === currentPageKey
-                )
-                  return false;
-                const previousPage = $getNodeByKey(oldPreviousPageKey);
-                if (!$isPageNode(previousPage)) return false;
-                const previousPageContent =
-                  previousPage.getPageContentElement();
-                if (!previousPageContent) return false;
-                pageObserver.unobserve(previousPageContent);
+                $onUpdate(() =>
+                  editor.read('latest', () => {
+                    const pageSetup = $getPageSetup();
+                    if (!pageSetup) return false;
+                    const selection = $getSelection();
+                    if (!$isRangeSelection(selection)) return false;
+                    const anchorNode = selection.anchor.getNode();
+                    const nearestRoot =
+                      anchorNode.getKey() === 'root'
+                        ? anchorNode
+                        : $getNearestRootOrShadowRoot(anchorNode);
+                    if (!$isPageContentNode(nearestRoot)) return false;
+                    const currentPage = nearestRoot.getPageNode();
+                    const currentPageKey = currentPage.getKey();
+                    const oldPreviousPageKey = previousPageKey;
+                    const pageContentElement =
+                      currentPage.getPageContentElement();
+                    if (!pageContentElement) return false;
+                    previousPageKey = currentPageKey;
+                    pageObserver.observe(pageContentElement);
+                    if (
+                      oldPreviousPageKey === null ||
+                      oldPreviousPageKey === currentPageKey
+                    )
+                      return false;
+                    const previousPage = $getNodeByKey(oldPreviousPageKey);
+                    if (!$isPageNode(previousPage)) return false;
+                    const previousPageContent =
+                      previousPage.getPageContentElement();
+                    if (!previousPageContent) return false;
+                    pageObserver.unobserve(previousPageContent);
+                    return false;
+                  }),
+                );
                 return false;
               },
               COMMAND_PRIORITY_LOW,
@@ -699,7 +713,7 @@ export const PagesExtension = defineExtension({
               RootNode,
               (_mutations, {prevEditorState}) => {
                 const change = $getStateChange(
-                  editor.getEditorState().read($getRoot),
+                  editor.read('latest', $getRoot),
                   prevEditorState.read($getRoot),
                   pageSetupState,
                 );
@@ -743,27 +757,31 @@ export const PagesExtension = defineExtension({
             }
           };
 
-          window.addEventListener('beforeprint', handleBeforePrint);
-          window.addEventListener('afterprint', handleAfterPrint);
-
-          return () => {
-            rootObserver.disconnect();
-            pageObserver.disconnect();
-            if (rafId !== null) {
-              cancelAnimationFrame(rafId);
-            }
-            clearMeasurementFlags();
-            removeCommandListeners();
-            removePageTransform();
-            removeRootTransform();
-            removePageContentTransform();
-            removeMutationListeners();
-            window.removeEventListener('beforeprint', handleBeforePrint);
-            window.removeEventListener('afterprint', handleAfterPrint);
-            if (output.disabled.peek()) {
-              destroyPageStructure();
-            }
-          };
+          return mergeRegister(
+            // Placed first so mergeRegister's reverse (LIFO) teardown runs it
+            // last, only after every listener and transform below has been
+            // torn down.
+            () => {
+              if (rafId !== null) {
+                cancelAnimationFrame(rafId);
+              }
+              pageObserver.disconnect();
+              rootObserver.disconnect();
+              if (output.disabled.peek()) {
+                destroyPageStructure();
+              }
+            },
+            clearMeasurementFlags,
+            removeCommandListeners,
+            removePageTransform,
+            removeRootTransform,
+            removePageContentTransform,
+            removeMutationListeners,
+            registerEventListeners(window, {
+              afterprint: handleAfterPrint,
+              beforeprint: handleBeforePrint,
+            }),
+          );
         });
       });
     }),

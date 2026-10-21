@@ -24,6 +24,7 @@ import {
   undo,
 } from '../keyboardShortcuts/index.mjs';
 import {
+  assertCaret,
   assertHTML,
   assertSelection,
   clearEditor,
@@ -41,7 +42,6 @@ import {
   selectFromFormatDropdown,
   test,
   waitForSelector,
-  withExclusiveClipboardAccess,
 } from '../utils/index.mjs';
 
 async function toggleBulletList(page) {
@@ -71,16 +71,14 @@ async function clickOutdentButton(page, times = 1) {
   }
 }
 
-test.beforeEach(({isPlainText}) => {
-  test.skip(isPlainText);
-});
+test.skip(({isPlainText}) => isPlainText, 'Requires rich text');
 
 test.describe('Checklist focus option', () => {
+  test.skip(({isCollab}) => isCollab);
   test('(shouldDisableFocusOnClickChecklist: true) Keeps focus outside the editor when clicking a checklist item', async ({
     isCollab,
     page,
   }) => {
-    test.skip(isCollab);
     await initialize({
       isCollab,
       page,
@@ -97,13 +95,15 @@ test.describe('Checklist focus option', () => {
       document.body.tabIndex = -1;
       document.body.focus();
     });
-    expect(
-      await page.evaluate(
-        () =>
-          document.activeElement === document.body ||
-          document.activeElement === document.documentElement,
-      ),
-    ).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.activeElement === document.body ||
+            document.activeElement === document.documentElement,
+        ),
+      )
+      .toBe(true);
 
     // Click on the checkbox marker area (left side of the item)
     const box = await checklistItem.boundingBox();
@@ -121,7 +121,6 @@ test.describe('Checklist focus option', () => {
     isCollab,
     page,
   }) => {
-    test.skip(isCollab);
     await initialize({
       isCollab,
       page,
@@ -138,13 +137,15 @@ test.describe('Checklist focus option', () => {
       document.body.tabIndex = -1;
       document.body.focus();
     });
-    expect(
-      await page.evaluate(
-        () =>
-          document.activeElement === document.body ||
-          document.activeElement === document.documentElement,
-      ),
-    ).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.activeElement === document.body ||
+            document.activeElement === document.documentElement,
+        ),
+      )
+      .toBe(true);
 
     // Click on the checkbox marker area (left side of the item)
     const box = await checklistItem.boundingBox();
@@ -166,149 +167,352 @@ test.describe('Checklist focus option', () => {
   });
 });
 
-test.describe.parallel('Nested List', () => {
+test.describe('Checklist space key', () => {
+  // Pressing the mouse anywhere in an item focuses the <li>, which carries
+  // tabIndex="-1" for its checkbox role. Firefox left focus there, and the
+  // key handlers read a focused item as "the checkbox is what the keyboard is
+  // operating", so Space toggled the item instead of typing a space.
+
+  test.skip(({isCollab}) => isCollab);
+  test('typing a space in the label leaves the checkbox alone', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    const item = page.locator('li[role="checkbox"]').first();
+    await expect(item).toHaveAttribute('aria-checked', 'false');
+
+    // Click the text itself, well clear of the marker on the left.
+    const textBox = await page.getByText('Task', {exact: true}).boundingBox();
+    await page.mouse.click(
+      textBox.x + textBox.width / 2,
+      textBox.y + textBox.height / 2,
+    );
+
+    // The click is in the label, so the editor holds the focus. The item is
+    // the active element only when its checkbox is what was clicked.
+    await expect(
+      page.locator('[data-lexical-editor="true"]').first(),
+    ).toBeFocused();
+
+    await page.keyboard.press('Space');
+
+    await expect(item).toHaveAttribute('aria-checked', 'false');
+    await expect(item).toHaveText('Ta sk');
+  });
+
+  test('space toggles the item after its checkbox is clicked', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    const item = page.locator('li[role="checkbox"]').first();
+    const box = await item.boundingBox();
+
+    // Click the marker, which is the flow that hands the item keyboard focus.
+    await page.mouse.click(box.x + 5, box.y + box.height / 2);
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('li[role="checkbox"]').first()).toBeFocused();
+
+    await page.keyboard.press('Space');
+
+    await expect(item).toHaveAttribute('aria-checked', 'false');
+    await expect(item).toHaveText('Task');
+  });
+
+  test('clicking the label after the checkbox gives focus back', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    const item = page.locator('li[role="checkbox"]').first();
+    const box = await item.boundingBox();
+
+    // The checkbox click leaves the item focused, and the click that follows
+    // lands in the label, so the editor has to take the focus back.
+    await page.mouse.click(box.x + 5, box.y + box.height / 2);
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+
+    const textBox = await page.getByText('Task', {exact: true}).boundingBox();
+    await page.mouse.click(
+      textBox.x + textBox.width / 2,
+      textBox.y + textBox.height / 2,
+    );
+    await page.keyboard.press('Space');
+
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+    await expect(item).toHaveText('Ta sk');
+  });
+
+  test('space toggles the item the arrow key moved onto', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('One');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Two');
+
+    const first = page.locator('li[role="checkbox"]').first();
+    const second = page.locator('li[role="checkbox"]').nth(1);
+    const box = await first.boundingBox();
+
+    await page.mouse.click(box.x + 5, box.y + box.height / 2);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Space');
+
+    await expect(second).toHaveAttribute('aria-checked', 'true');
+    await expect(second).toHaveText('Two');
+  });
+
+  test('space toggles the item the left arrow moved onto', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    const item = page.locator('li[role="checkbox"]').first();
+
+    // The left arrow at the start of the label is the third way onto the
+    // checkbox, with the caret never having left the item.
+    await moveToLineBeginning(page);
+    await assertCaret(page, 'li[role=checkbox] > span', 0);
+    await moveLeft(page);
+    await expect(page.locator('li[role="checkbox"]').first()).toBeFocused();
+
+    await page.keyboard.press('Space');
+
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+    await expect(item).toHaveText('Task');
+  });
+
+  test('the item does not hold the focus for the length of the press', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    // Press the label and hold: the item is the caret's nearest focusable
+    // ancestor, so the browser focuses it, and it should not stay focused
+    // while the button is down.
+    const textBox = await page.getByText('Task', {exact: true}).boundingBox();
+    await page.mouse.move(
+      textBox.x + textBox.width / 2,
+      textBox.y + textBox.height / 2,
+    );
+    await page.mouse.down();
+
+    await expect(
+      page.locator('[data-lexical-editor="true"]').first(),
+    ).toBeFocused();
+
+    await page.mouse.up();
+  });
+
+  test('an arrow key that moves the caret hands focus back to the editor', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    const item = page.locator('li[role="checkbox"]').first();
+    const box = await item.boundingBox();
+
+    // Click the check mark, so the item holds the focus.
+    await page.mouse.click(box.x + 5, box.y + box.height / 2);
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+
+    // Moving the caret through the label is operating the text, not the
+    // checkbox, so the editor takes the focus back.
+    await moveLeft(page);
+    await expect(
+      page.locator('[data-lexical-editor="true"]').first(),
+    ).toBeFocused();
+
+    await page.keyboard.press('Space');
+
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+    await expect(item).toHaveText('Tas k');
+  });
+
+  test('the left arrow leaves the item when the checkbox already holds focus', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('One');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Two');
+
+    const first = page.locator('li[role="checkbox"]').first();
+    const second = page.locator('li[role="checkbox"]').nth(1);
+
+    // The first left arrow reaches the checkbox of the second item.
+    await moveToLineBeginning(page);
+    await assertCaret(page, 'li[role=checkbox]:nth-child(2) > span', 0);
+    await moveLeft(page);
+    await expect(page.locator('li[role="checkbox"]').nth(1)).toBeFocused();
+
+    // The second one leaves the item, so the caret carries on into the item
+    // before it and the focus goes with it.
+    await moveLeft(page);
+    await expect(
+      page.locator('[data-lexical-editor="true"]').first(),
+    ).toBeFocused();
+
+    await page.keyboard.type('X');
+
+    await expect(first).toHaveText('OneX');
+    await expect(second).toHaveText('Two');
+    await expect(second).toHaveAttribute('aria-checked', 'false');
+  });
+
+  test('the right arrow moves the caret off a checkbox the left arrow reached', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    const item = page.locator('li[role="checkbox"]').first();
+
+    // Left at the start of the label puts the focus on the checkbox.
+    await moveToLineBeginning(page);
+    await assertCaret(page, 'li[role=checkbox] > span', 0);
+    await moveLeft(page);
+    await expect(page.locator('li[role="checkbox"]').first()).toBeFocused();
+
+    // Right moves the caret back into the label, so the checkbox is no
+    // longer what the keyboard is operating.
+    await moveRight(page, 1);
+    await expect(
+      page.locator('[data-lexical-editor="true"]').first(),
+    ).toBeFocused();
+
+    await page.keyboard.press('Space');
+
+    await expect(item).toHaveAttribute('aria-checked', 'false');
+    await expect(item).toHaveText('T ask');
+  });
+
+  test('typing in the label hands focus back to the editor', async ({
+    isCollab,
+    page,
+  }) => {
+    await initialize({isCollab, page});
+    await focusEditor(page);
+
+    await toggleCheckList(page);
+    await page.keyboard.type('Task');
+
+    const item = page.locator('li[role="checkbox"]').first();
+    const box = await item.boundingBox();
+
+    // Click the check mark, so the item holds the focus and the caret is
+    // still sitting in the label.
+    await page.mouse.click(box.x + 5, box.y + box.height / 2);
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+
+    // Typing is text entry, so the editor takes the focus back and the next
+    // Space is a space rather than a toggle.
+    await page.keyboard.type('X');
+    await expect(
+      page.locator('[data-lexical-editor="true"]').first(),
+    ).toBeFocused();
+
+    await moveLeft(page);
+    await page.keyboard.press('Space');
+
+    await expect(item).toHaveAttribute('aria-checked', 'true');
+    await expect(item).toHaveText('Task X');
+  });
+});
+
+test.describe('Nested List', () => {
   test.beforeEach(({isCollab, page}) => initialize({isCollab, page}));
 
-  test(
-    `Can create a list and partially copy some content out of it`,
-    {
-      tag: '@flaky',
-    },
-    async ({page, isCollab}) => {
-      await focusEditor(page);
-      await page.keyboard.type(
-        'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam venenatis risus ac cursus efficitur. Cras efficitur magna odio, lacinia posuere mauris placerat in. Etiam eu congue nisl. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Nulla vulputate justo id eros convallis, vel pellentesque orci hendrerit. Pellentesque accumsan molestie eros, vitae tempor nisl semper sit amet. Sed vulputate leo dolor, et bibendum quam feugiat eget. Praesent vestibulum libero sed enim ornare, in consequat dui posuere. Maecenas ornare vestibulum felis, non elementum urna imperdiet sit amet.',
-      );
-      await toggleBulletList(page);
-      await moveToEditorBeginning(page);
-      await moveRight(page, 6);
-      await selectCharacters(page, 'right', 11);
-
-      await withExclusiveClipboardAccess(async () => {
-        const clipboard = await copyToClipboard(page);
-
-        await moveToEditorEnd(page);
-        await page.keyboard.press('Enter');
-        await page.keyboard.press('Enter');
-
-        await pasteFromClipboard(page, clipboard);
-      });
-
-      await assertHTML(
-        page,
-        html`
-          <ul class="PlaygroundEditorTheme__ul" dir="auto">
-            <li class="PlaygroundEditorTheme__listItem" value="1">
-              <span data-lexical-text="true">
-                Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam
-                venenatis risus ac cursus efficitur. Cras efficitur magna odio,
-                lacinia posuere mauris placerat in. Etiam eu congue nisl.
-                Vestibulum ante ipsum primis in faucibus orci luctus et ultrices
-                posuere cubilia curae; Nulla vulputate justo id eros convallis,
-                vel pellentesque orci hendrerit. Pellentesque accumsan molestie
-                eros, vitae tempor nisl semper sit amet. Sed vulputate leo
-                dolor, et bibendum quam feugiat eget. Praesent vestibulum libero
-                sed enim ornare, in consequat dui posuere. Maecenas ornare
-                vestibulum felis, non elementum urna imperdiet sit amet.
-              </span>
-            </li>
-          </ul>
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-            <span data-lexical-text="true">ipsum dolor</span>
-          </p>
-        `,
-      );
-    },
-  );
-
-  test('Should outdent if indented when the backspace key is pressed', async ({
+  test(`Can create a list and partially copy some content out of it`, async ({
     page,
   }) => {
     await focusEditor(page);
+    // Seed the long paragraph in one input event; this test exercises list
+    // conversion and partial copying, not individual character entry.
+    await page.keyboard.insertText(
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam venenatis risus ac cursus efficitur. Cras efficitur magna odio, lacinia posuere mauris placerat in. Etiam eu congue nisl. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Nulla vulputate justo id eros convallis, vel pellentesque orci hendrerit. Pellentesque accumsan molestie eros, vitae tempor nisl semper sit amet. Sed vulputate leo dolor, et bibendum quam feugiat eget. Praesent vestibulum libero sed enim ornare, in consequat dui posuere. Maecenas ornare vestibulum felis, non elementum urna imperdiet sit amet.',
+    );
     await toggleBulletList(page);
+    await moveToEditorBeginning(page);
+    await moveRight(page, 6);
+    await selectCharacters(page, 'right', 11);
 
-    await page.keyboard.type('Hello');
-    await page.keyboard.press('Enter');
+    {
+      const clipboard = await copyToClipboard(page);
 
-    await clickIndentButton(page, 3);
+      await moveToEditorEnd(page);
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Enter');
 
-    await assertHTML(
-      page,
-      html`
-        <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">Hello</span>
-          </li>
-          <li
-            class="PlaygroundEditorTheme__listItem PlaygroundEditorTheme__nestedListItem"
-            value="2">
-            <ul class="PlaygroundEditorTheme__ul">
-              <li
-                class="PlaygroundEditorTheme__listItem PlaygroundEditorTheme__nestedListItem"
-                value="1">
-                <ul class="PlaygroundEditorTheme__ul">
-                  <li
-                    class="PlaygroundEditorTheme__listItem PlaygroundEditorTheme__nestedListItem"
-                    value="1">
-                    <ul class="PlaygroundEditorTheme__ul">
-                      <li class="PlaygroundEditorTheme__listItem" value="1">
-                        <br />
-                      </li>
-                    </ul>
-                  </li>
-                </ul>
-              </li>
-            </ul>
-          </li>
-        </ul>
-      `,
-    );
-
-    await page.keyboard.press('Backspace');
+      await pasteFromClipboard(page, clipboard);
+    }
 
     await assertHTML(
       page,
       html`
         <ul class="PlaygroundEditorTheme__ul" dir="auto">
           <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">Hello</span>
-          </li>
-          <li
-            class="PlaygroundEditorTheme__listItem PlaygroundEditorTheme__nestedListItem"
-            value="2">
-            <ul class="PlaygroundEditorTheme__ul">
-              <li
-                class="PlaygroundEditorTheme__listItem PlaygroundEditorTheme__nestedListItem"
-                value="1">
-                <ul class="PlaygroundEditorTheme__ul">
-                  <li class="PlaygroundEditorTheme__listItem" value="1">
-                    <br />
-                  </li>
-                </ul>
-              </li>
-            </ul>
+            <span data-lexical-text="true">
+              Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam
+              venenatis risus ac cursus efficitur. Cras efficitur magna odio,
+              lacinia posuere mauris placerat in. Etiam eu congue nisl.
+              Vestibulum ante ipsum primis in faucibus orci luctus et ultrices
+              posuere cubilia curae; Nulla vulputate justo id eros convallis,
+              vel pellentesque orci hendrerit. Pellentesque accumsan molestie
+              eros, vitae tempor nisl semper sit amet. Sed vulputate leo dolor,
+              et bibendum quam feugiat eget. Praesent vestibulum libero sed enim
+              ornare, in consequat dui posuere. Maecenas ornare vestibulum
+              felis, non elementum urna imperdiet sit amet.
+            </span>
           </li>
         </ul>
-      `,
-    );
-
-    await page.keyboard.press('Backspace');
-
-    await assertHTML(
-      page,
-      html`
-        <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">Hello</span>
-          </li>
-          <li
-            class="PlaygroundEditorTheme__listItem PlaygroundEditorTheme__nestedListItem"
-            value="2">
-            <ul class="PlaygroundEditorTheme__ul">
-              <li class="PlaygroundEditorTheme__listItem" value="1"><br /></li>
-            </ul>
-          </li>
-        </ul>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <span data-lexical-text="true">ipsum dolor</span>
+        </p>
       `,
     );
   });
@@ -455,7 +659,9 @@ test.describe.parallel('Nested List', () => {
       page,
       html`
         <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="1">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
         </ul>
       `,
     );
@@ -724,7 +930,9 @@ test.describe.parallel('Nested List', () => {
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
 
@@ -929,7 +1137,9 @@ test.describe.parallel('Nested List', () => {
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
 
@@ -1247,7 +1457,9 @@ test.describe.parallel('Nested List', () => {
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
 
@@ -1334,7 +1546,9 @@ test.describe.parallel('Nested List', () => {
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
 
@@ -1372,11 +1586,15 @@ test.describe.parallel('Nested List', () => {
             <span data-lexical-text="true">from</span>
           </li>
         </ul>
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
         <p class="PlaygroundEditorTheme__paragraph" dir="auto">
           <span data-lexical-text="true">the</span>
         </p>
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
         <ul class="PlaygroundEditorTheme__ul" dir="auto">
           <li class="PlaygroundEditorTheme__listItem" value="1">
             <span data-lexical-text="true">other</span>
@@ -1401,11 +1619,15 @@ test.describe.parallel('Nested List', () => {
         <p class="PlaygroundEditorTheme__paragraph" dir="auto">
           <span data-lexical-text="true">from</span>
         </p>
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
         <p class="PlaygroundEditorTheme__paragraph" dir="auto">
           <span data-lexical-text="true">the</span>
         </p>
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
         <p class="PlaygroundEditorTheme__paragraph" dir="auto">
           <span data-lexical-text="true">other</span>
         </p>
@@ -1427,11 +1649,15 @@ test.describe.parallel('Nested List', () => {
           <li class="PlaygroundEditorTheme__listItem" value="2">
             <span data-lexical-text="true">from</span>
           </li>
-          <li class="PlaygroundEditorTheme__listItem" value="3"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="3">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
           <li class="PlaygroundEditorTheme__listItem" value="4">
             <span data-lexical-text="true">the</span>
           </li>
-          <li class="PlaygroundEditorTheme__listItem" value="5"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="5">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
           <li class="PlaygroundEditorTheme__listItem" value="6">
             <span data-lexical-text="true">other</span>
           </li>
@@ -1456,7 +1682,9 @@ test.describe.parallel('Nested List', () => {
       page,
       html`
         <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="1">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
         </ul>
       `,
     );
@@ -1467,7 +1695,9 @@ test.describe.parallel('Nested List', () => {
       page,
       html`
         <ol class="PlaygroundEditorTheme__ol1" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="1">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
         </ol>
       `,
     );
@@ -1478,7 +1708,9 @@ test.describe.parallel('Nested List', () => {
       page,
       html`
         <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="1">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
         </ul>
       `,
     );
@@ -1643,7 +1875,9 @@ test.describe.parallel('Nested List', () => {
           <li class="PlaygroundEditorTheme__listItem" value="4">
             <span data-lexical-text="true">other</span>
           </li>
-          <li class="PlaygroundEditorTheme__listItem" value="5"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="5">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
         </ul>
       `,
     );
@@ -1666,7 +1900,9 @@ test.describe.parallel('Nested List', () => {
           <li class="PlaygroundEditorTheme__listItem" value="4">
             <span data-lexical-text="true">other</span>
           </li>
-          <li class="PlaygroundEditorTheme__listItem" value="5"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="5">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
         </ol>
       `,
     );
@@ -1689,7 +1925,9 @@ test.describe.parallel('Nested List', () => {
           <li class="PlaygroundEditorTheme__listItem" value="4">
             <span data-lexical-text="true">other</span>
           </li>
-          <li class="PlaygroundEditorTheme__listItem" value="5"><br /></li>
+          <li class="PlaygroundEditorTheme__listItem" value="5">
+            <br data-lexical-managed-linebreak="true" />
+          </li>
         </ul>
       `,
     );
@@ -2193,7 +2431,6 @@ test.describe.parallel('Nested List', () => {
 
   test(`Should NOT merge selected nodes into existing list siblings of a different type when formatting to a list`, async ({
     page,
-    isCollab,
   }) => {
     await focusEditor(page);
 
@@ -2279,7 +2516,7 @@ test.describe.parallel('Nested List', () => {
     // undo case is when the user presses undo.
 
     const forwardHTML =
-      '<ol start="321" class="PlaygroundEditorTheme__ol1" dir="auto"><li value="321" class="PlaygroundEditorTheme__listItem"><br></li></ol>';
+      '<ol start="321" class="PlaygroundEditorTheme__ol1" dir="auto"><li value="321" class="PlaygroundEditorTheme__listItem"><br data-lexical-managed-linebreak="true"></li></ol>';
 
     const undoHTML = html`
       <p class="PlaygroundEditorTheme__paragraph" dir="auto">
@@ -2296,76 +2533,6 @@ test.describe.parallel('Nested List', () => {
     await assertHTML(page, undoHTML);
     await redo(page);
     await assertHTML(page, forwardHTML);
-  });
-
-  test(`Should not process paragraph markdown inside list.`, async ({page}) => {
-    await focusEditor(page);
-
-    await toggleBulletList(page);
-    await page.keyboard.type('# ');
-    await assertHTML(
-      page,
-      html`
-        <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">#</span>
-          </li>
-        </ul>
-      `,
-    );
-  });
-
-  test(`Un-indents list empty list items when the user presses enter`, async ({
-    page,
-  }) => {
-    await focusEditor(page);
-    await toggleBulletList(page);
-    await page.keyboard.type('a');
-    await page.keyboard.press('Enter');
-    await clickIndentButton(page);
-    await clickIndentButton(page);
-    await page.keyboard.press('Enter');
-    await assertHTML(
-      page,
-      html`
-        <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">a</span>
-          </li>
-          <li
-            class="PlaygroundEditorTheme__listItem PlaygroundEditorTheme__nestedListItem"
-            value="2">
-            <ul class="PlaygroundEditorTheme__ul">
-              <li class="PlaygroundEditorTheme__listItem" value="1"><br /></li>
-            </ul>
-          </li>
-        </ul>
-      `,
-    );
-    await page.keyboard.press('Enter');
-    await assertHTML(
-      page,
-      html`
-        <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">a</span>
-          </li>
-          <li class="PlaygroundEditorTheme__listItem" value="2"><br /></li>
-        </ul>
-      `,
-    );
-    await page.keyboard.press('Enter');
-    await assertHTML(
-      page,
-      html`
-        <ul class="PlaygroundEditorTheme__ul" dir="auto">
-          <li class="PlaygroundEditorTheme__listItem" value="1">
-            <span data-lexical-text="true">a</span>
-          </li>
-        </ul>
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
-      `,
-    );
   });
 
   test(`Converts a List with one ListItem to a Paragraph when Normal is selected in the format menu`, async ({
@@ -2614,71 +2781,68 @@ test.describe.parallel('Nested List', () => {
     );
   });
 
-  test(
-    'can navigate and check/uncheck with keyboard',
-    {
-      tag: '@flaky',
-    },
-    async ({page, isCollab}) => {
-      await focusEditor(page);
-      await toggleCheckList(page);
-      //
-      // [ ] a
-      // [ ] b
-      //     [ ] c
-      //         [ ] d
-      //         [ ] e
-      // [ ] f
-      await page.keyboard.type('a');
-      await page.keyboard.press('Enter');
-      await page.keyboard.type('b');
-      await page.keyboard.press('Enter');
-      await click(page, '.toolbar-item.alignment');
-      await click(page, 'button:has-text("Indent")');
-      await page.keyboard.type('c');
-      await page.keyboard.press('Enter');
-      await click(page, '.toolbar-item.alignment');
-      await click(page, 'button:has-text("Indent")');
-      await page.keyboard.type('d');
-      await page.keyboard.press('Enter');
-      await page.keyboard.type('e');
-      await page.keyboard.press('Enter');
-      await page.keyboard.press('Backspace');
-      await page.keyboard.press('Backspace');
-      await page.keyboard.type('f');
+  test('can navigate and check/uncheck with keyboard', async ({
+    page,
+    isCollab,
+  }) => {
+    await focusEditor(page);
+    await toggleCheckList(page);
+    //
+    // [ ] a
+    // [ ] b
+    //     [ ] c
+    //         [ ] d
+    //         [ ] e
+    // [ ] f
+    await page.keyboard.type('a');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('b');
+    await page.keyboard.press('Enter');
+    await click(page, '.toolbar-item.alignment');
+    await click(page, 'button:has-text("Indent")');
+    await page.keyboard.type('c');
+    await page.keyboard.press('Enter');
+    await click(page, '.toolbar-item.alignment');
+    await click(page, 'button:has-text("Indent")');
+    await page.keyboard.type('d');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('e');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.type('f');
 
-      const assertCheckCount = async (checkCount, uncheckCount) => {
-        const pageOrFrame = await (isCollab ? page.frame('left') : page);
-        await expect(
-          pageOrFrame.locator('li[role="checkbox"][aria-checked="true"]'),
-        ).toHaveCount(checkCount);
-        await expect(
-          pageOrFrame.locator('li[role="checkbox"][aria-checked="false"]'),
-        ).toHaveCount(uncheckCount);
-      };
+    const assertCheckCount = async (checkCount, uncheckCount) => {
+      const pageOrFrame = await (isCollab ? page.frame('left') : page);
+      await expect(
+        pageOrFrame.locator('li[role="checkbox"][aria-checked="true"]'),
+      ).toHaveCount(checkCount);
+      await expect(
+        pageOrFrame.locator('li[role="checkbox"][aria-checked="false"]'),
+      ).toHaveCount(uncheckCount);
+    };
 
-      await assertCheckCount(0, 6);
+    await assertCheckCount(0, 6);
 
-      // Go back to select checkbox
-      await page.keyboard.press('ArrowLeft');
-      await page.keyboard.press('ArrowLeft');
+    // Go back to select checkbox
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Space');
+
+    await repeat(5, async () => {
+      await page.keyboard.press('ArrowUp', {delay: 50});
       await page.keyboard.press('Space');
+    });
 
-      await repeat(5, async () => {
-        await page.keyboard.press('ArrowUp', {delay: 50});
-        await page.keyboard.press('Space');
-      });
+    await assertCheckCount(6, 0);
 
-      await assertCheckCount(6, 0);
+    await repeat(3, async () => {
+      await page.keyboard.press('ArrowDown', {delay: 50});
+      await page.keyboard.press('Space');
+    });
 
-      await repeat(3, async () => {
-        await page.keyboard.press('ArrowDown', {delay: 50});
-        await page.keyboard.press('Space');
-      });
-
-      await assertCheckCount(3, 3);
-    },
-  );
+    await assertCheckCount(3, 3);
+  });
 
   test('replaces existing element node', async ({page}) => {
     // Create two quote blocks, select it and format to a list
@@ -2724,7 +2888,7 @@ test.describe.parallel('Nested List', () => {
           class="PlaygroundEditorTheme__paragraph PlaygroundEditorTheme__indent"
           dir="auto"
           style="padding-inline-start: calc(1 * var(--lexical-indent-base-value, 40px))">
-          <br />
+          <br data-lexical-managed-linebreak="true" />
         </p>
       `,
     );
@@ -2736,56 +2900,52 @@ test.describe.parallel('Nested List', () => {
     });
   });
 
-  test(
-    'remove list breaks when selection in empty nested list item 2',
-    {
-      tag: '@flaky',
-    },
-    async ({page}) => {
-      await focusEditor(page);
-      await page.keyboard.type('Hello World');
-      await page.keyboard.press('Enter');
-      await page.keyboard.type('a');
-      await toggleBulletList(page);
-      await page.keyboard.press('Enter');
-      await page.keyboard.type('b');
-      await page.keyboard.press('ArrowUp');
-      await page.keyboard.press('Enter');
-      await click(page, '.toolbar-item.alignment');
-      await click(page, 'button:has-text("Indent")');
-      await toggleBulletList(page);
-      await assertHTML(
-        page,
-        html`
-          <p class="PlaygroundEditorTheme__paragraph" dir="auto">
-            <span data-lexical-text="true">Hello World</span>
-          </p>
-          <ul class="PlaygroundEditorTheme__ul" dir="auto">
-            <li class="PlaygroundEditorTheme__listItem" value="1">
-              <span data-lexical-text="true">a</span>
-            </li>
-          </ul>
-          <p
-            class="PlaygroundEditorTheme__paragraph PlaygroundEditorTheme__indent"
-            dir="auto"
-            style="padding-inline-start: calc(1 * var(--lexical-indent-base-value, 40px))">
-            <br />
-          </p>
-          <ul class="PlaygroundEditorTheme__ul" dir="auto">
-            <li class="PlaygroundEditorTheme__listItem" value="1">
-              <span data-lexical-text="true">b</span>
-            </li>
-          </ul>
-        `,
-      );
-      await assertSelection(page, {
-        anchorOffset: 0,
-        anchorPath: [2],
-        focusOffset: 0,
-        focusPath: [2],
-      });
-    },
-  );
+  test('remove list breaks when selection in empty nested list item 2', async ({
+    page,
+  }) => {
+    await focusEditor(page);
+    await page.keyboard.type('Hello World');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('a');
+    await toggleBulletList(page);
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('b');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('Enter');
+    await click(page, '.toolbar-item.alignment');
+    await click(page, 'button:has-text("Indent")');
+    await toggleBulletList(page);
+    await assertHTML(
+      page,
+      html`
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <span data-lexical-text="true">Hello World</span>
+        </p>
+        <ul class="PlaygroundEditorTheme__ul" dir="auto">
+          <li class="PlaygroundEditorTheme__listItem" value="1">
+            <span data-lexical-text="true">a</span>
+          </li>
+        </ul>
+        <p
+          class="PlaygroundEditorTheme__paragraph PlaygroundEditorTheme__indent"
+          dir="auto"
+          style="padding-inline-start: calc(1 * var(--lexical-indent-base-value, 40px))">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
+        <ul class="PlaygroundEditorTheme__ul" dir="auto">
+          <li class="PlaygroundEditorTheme__listItem" value="1">
+            <span data-lexical-text="true">b</span>
+          </li>
+        </ul>
+      `,
+    );
+    await assertSelection(page, {
+      anchorOffset: 0,
+      anchorPath: [2],
+      focusOffset: 0,
+      focusPath: [2],
+    });
+  });
   test('new list item should preserve format from previous list item even after new list item is indented', async ({
     page,
   }) => {
@@ -2832,7 +2992,7 @@ test.describe.parallel('Nested List', () => {
       html`
         <ul class="PlaygroundEditorTheme__ul" dir="auto">
           <li class="PlaygroundEditorTheme__listItem" value="1">
-            <br />
+            <br data-lexical-managed-linebreak="true" />
           </li>
         </ul>
       `,
@@ -2841,7 +3001,9 @@ test.describe.parallel('Nested List', () => {
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
   });

@@ -6,31 +6,31 @@
  *
  */
 
-import type {
-  ElementTransformer,
-  MultilineElementTransformer,
-  TextFormatTransformer,
-  TextMatchTransformer,
-  Transformer,
-} from './MarkdownTransformers';
-
-import {$isListItemNode, $isListNode, ListItemNode} from '@lexical/list';
+import {$isListItemNode, $isListNode, type ListItemNode} from '@lexical/list';
 import {$isQuoteNode} from '@lexical/rich-text';
-import {$findMatchingParent} from '@lexical/utils';
 import {
   $createParagraphNode,
   $createTabNode,
   $createTextNode,
-  $getRoot,
-  $getSelection,
+  $findMatchingParent,
   $isElementNode,
   $isParagraphNode,
-  ElementNode,
-  TextNode,
+  $isTabNode,
+  type ElementNode,
+  type LexicalNode,
+  type TextNode,
 } from 'lexical';
 
 import {importTextTransformers} from './importTextTransformers';
-import {$createMarkdownLineBreakNode} from './MarkdownTransformers';
+import {
+  $createMarkdownLineBreakNode,
+  type ElementTransformer,
+  type MultilineElementTransformer,
+  type TextFormatTransformer,
+  type TextMatchTransformer,
+  type Transformer,
+  withListIndentColumns,
+} from './MarkdownTransformers';
 import {isEmptyParagraph, transformersByType} from './utils';
 
 export type TextFormatTransformersIndex = Readonly<{
@@ -40,23 +40,27 @@ export type TextFormatTransformersIndex = Readonly<{
 }>;
 
 /**
- * Renders markdown from a string. The selection is moved to the start after the operation.
+ * Parses a markdown string and appends the resulting nodes to `container`.
+ * Does not clear the container or touch the selection — callers handle that.
  */
-export function createMarkdownImport(
-  transformers: Array<Transformer>,
+export function $importMarkdownNodes(
+  markdownString: string,
+  container: ElementNode,
+  transformers: Transformer[],
   shouldPreserveNewLines = false,
-): (markdownString: string, node?: ElementNode) => void {
+): void {
   const byType = transformersByType(transformers);
   const textFormatTransformersIndex = createTextFormatTransformersIndex(
     byType.textFormat,
   );
+  const lines = markdownString.split('\n');
+  const linesLength = lines.length;
 
-  return (markdownString, node) => {
-    const lines = markdownString.split('\n');
-    const linesLength = lines.length;
-    const root = node || $getRoot();
-    root.clear();
-
+  // A list line is measured against the column its parent item's content
+  // starts at, which only the line that opened that level knows. Blank lines
+  // between list lines make the list loose rather than ending it — except
+  // when they are being preserved, where they are content like any block.
+  withListIndentColumns(!shouldPreserveNewLines, () => {
     for (let i = 0; i < linesLength; i++) {
       const lineText = lines[i];
 
@@ -64,53 +68,41 @@ export function createMarkdownImport(
         lines,
         i,
         byType.multilineElement,
-        root,
+        container,
       );
 
       if (imported) {
-        // If a multiline markdown element was imported, we don't want to process the lines that were part of it anymore.
-        // There could be other sub-markdown elements (both multiline and normal ones) matching within this matched multiline element's children.
-        // However, it would be the responsibility of the matched multiline transformer to decide how it wants to handle them.
-        // We cannot handle those, as there is no way for us to know how to maintain the correct order of generated lexical nodes for possible children.
-        i = shiftedIndex; // Next loop will start from the line after the last line of the multiline element
+        i = shiftedIndex;
         continue;
       }
 
       $importBlocks(
         lineText,
-        root,
+        container,
         byType.element,
         textFormatTransformersIndex,
         byType.textMatch,
         shouldPreserveNewLines,
       );
     }
+  });
 
-    const children = root.getChildren();
-    for (const child of children) {
-      // By default, removing empty paragraphs as md does not really
-      // allow empty lines and uses them as delimiter.
-      // If you need empty lines set shouldPreserveNewLines = true.
-      if (
-        !shouldPreserveNewLines &&
-        isEmptyParagraph(child) &&
-        root.getChildrenSize() > 1
-      ) {
-        child.remove();
-        continue;
-      }
-      // Convert all '\t' into TabNode.
-      if ($isElementNode(child)) {
-        for (const textNode of child.getAllTextNodes()) {
-          $normalizeMarkdownTextNode(textNode);
-        }
+  const children = container.getChildren();
+  for (const child of children) {
+    if (
+      !shouldPreserveNewLines &&
+      isEmptyParagraph(child) &&
+      container.getChildrenSize() > 1
+    ) {
+      child.remove();
+      continue;
+    }
+    if ($isElementNode(child)) {
+      for (const textNode of child.getAllTextNodes()) {
+        $normalizeMarkdownTextNode(textNode);
       }
     }
-
-    if ($getSelection() !== null) {
-      root.selectStart();
-    }
-  };
+  }
 }
 
 /**
@@ -118,9 +110,9 @@ export function createMarkdownImport(
  * @returns first element of the returned tuple is a boolean indicating if a multiline element was imported. The second element is the index of the last line that was processed.
  */
 function $importMultiline(
-  lines: Array<string>,
+  lines: string[],
   startLineIndex: number,
-  multilineElementTransformers: Array<MultilineElementTransformer>,
+  multilineElementTransformers: MultilineElementTransformer[],
   rootNode: ElementNode,
 ): [boolean, number] {
   for (const transformer of multilineElementTransformers) {
@@ -232,9 +224,9 @@ function $importMultiline(
 function $importBlocks(
   lineText: string,
   rootNode: ElementNode,
-  elementTransformers: Array<ElementTransformer>,
+  elementTransformers: ElementTransformer[],
   textFormatTransformersIndex: TextFormatTransformersIndex,
-  textMatchTransformers: Array<TextMatchTransformer>,
+  textMatchTransformers: TextMatchTransformer[],
   shouldPreserveNewLines: boolean,
 ) {
   const textNode = $createTextNode(lineText);
@@ -262,7 +254,7 @@ function $importBlocks(
   // If no transformer found and we left with original paragraph node
   // can check if its content can be appended to the previous node
   // if it's a paragraph, quote or list
-  if (elementNode.isAttached() && lineText.length > 0) {
+  if (elementNode.getParent() !== null && lineText.length > 0) {
     const previousNode = elementNode.getPreviousSibling();
     if (
       !shouldPreserveNewLines && // Only append if we're not preserving newlines
@@ -292,30 +284,50 @@ function $importBlocks(
   }
 }
 
-// Look in node for '\t' and create a TabNode for each occurrence.
+// Look in node for '\t' and create a TabNode for each occurrence. The
+// replacement nodes are built directly rather than through
+// `splitText(...offsets)`: spreading one argument per tab boundary overflows
+// the call stack on a long run of tabs, and the text can hold arbitrarily
+// many.
 function $normalizeMarkdownTextNode(textNode: TextNode): void {
-  const tabOffsets: Set<number> = new Set();
-  const text = textNode.getTextContent();
-  let index = text.indexOf('\t');
-
-  // Find all tab occurrences
-  while (index !== -1) {
-    tabOffsets.add(index);
-    tabOffsets.add(index + 1);
-    index = text.indexOf('\t', index + 1);
+  // A TabNode is a TextNode whose content is a tab, so without this guard the
+  // rebuild below would destroy it and create an equivalent one in its place.
+  if ($isTabNode(textNode)) {
+    return;
   }
-
-  // Split node to isolate each tab then replace '\t' into TabNode
-  const splitNodes = textNode.splitText(...tabOffsets);
-  splitNodes.forEach(node => {
-    if (node.getTextContent() === '\t') {
-      node.replace($createTabNode());
+  const text = textNode.getTextContent();
+  if (!text.includes('\t')) {
+    return;
+  }
+  const format = textNode.getFormat();
+  const style = textNode.getStyle();
+  const nodes: LexicalNode[] = [];
+  let start = 0;
+  for (
+    let index = text.indexOf('\t');
+    index !== -1;
+    index = text.indexOf('\t', index + 1)
+  ) {
+    if (index > start) {
+      nodes.push(
+        $createTextNode(text.slice(start, index))
+          .setFormat(format)
+          .setStyle(style),
+      );
     }
-  });
+    nodes.push($createTabNode());
+    start = index + 1;
+  }
+  if (start < text.length) {
+    nodes.push(
+      $createTextNode(text.slice(start)).setFormat(format).setStyle(style),
+    );
+  }
+  textNode.getParentOrThrow().splice(textNode.getIndexWithinParent(), 1, nodes);
 }
 
 function createTextFormatTransformersIndex(
-  textTransformers: Array<TextFormatTransformer>,
+  textTransformers: TextFormatTransformer[],
 ): TextFormatTransformersIndex {
   const transformersByTag: Record<string, TextFormatTransformer> = {};
   const fullMatchRegExpByTag: Record<string, RegExp> = {};

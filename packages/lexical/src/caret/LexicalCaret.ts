@@ -6,14 +6,15 @@
  *
  */
 import type {LexicalNode, NodeKey} from '../LexicalNode';
+import type {TextNode} from '../nodes/LexicalTextNode';
 
-import devInvariant from 'shared/devInvariant';
-import invariant from 'shared/invariant';
+import devInvariant from '@lexical/internal/devInvariant';
+import invariant from '@lexical/internal/invariant';
 
+import {$getSlotHost, $getSlotHostKey, $getSlotMap} from '../LexicalSlot';
 import {$getRoot, $isRootOrShadowRoot} from '../LexicalUtils';
-import {$isElementNode, ElementNode} from '../nodes/LexicalElementNode';
+import {$isElementNode, type ElementNode} from '../nodes/LexicalElementNode';
 import {$isRootNode} from '../nodes/LexicalRootNode';
-import {TextNode} from '../nodes/LexicalTextNode';
 
 /**
  * The direction of a caret, 'next' points towards the end of the document
@@ -587,7 +588,14 @@ function $filterByMode<T extends ElementNode>(
   node: T | null,
   mode: RootMode = 'root',
 ): T | null {
-  return MODE_PREDICATE[mode](node) ? null : node;
+  if (node === null || MODE_PREDICATE[mode](node)) {
+    return null;
+  }
+  // A slotted node's up-link is __slotHost, not __parent, so getParent() (and
+  // thus getParentOrThrow()) returns null on it. It is a hard upward boundary
+  // in every mode — like the root — so caret walks must stop at it instead of
+  // trying to rewind past a parentless node.
+  return $getSlotHostKey(node) === null ? node : null;
 }
 
 abstract class AbstractSiblingCaret<
@@ -1001,28 +1009,28 @@ class CaretRangeImpl<D extends CaretDirection> implements CaretRange<D> {
     return this.anchor.isSamePointCaret(this.focus);
   }
   getTextSlices(): TextPointCaretSliceTuple<D> {
-    const getSlice = (k: 'anchor' | 'focus') => {
-      const caret = this[k].getLatest();
-      return $isTextPointCaret(caret)
-        ? $getSliceFromTextPointCaret(caret, k)
-        : null;
-    };
-    const anchorSlice = getSlice('anchor');
-    const focusSlice = getSlice('focus');
-    if (anchorSlice && focusSlice) {
-      const {caret: anchorCaret} = anchorSlice;
-      const {caret: focusCaret} = focusSlice;
-      if (anchorCaret.isSameNodeCaret(focusCaret)) {
-        return [
-          $getTextPointCaretSlice(
-            anchorCaret,
-            focusCaret.offset - anchorCaret.offset,
-          ),
-          null,
-        ];
-      }
+    const anchor = this.anchor.getLatest();
+    const focus = this.focus.getLatest();
+    if (
+      $isTextPointCaret(anchor) &&
+      $isTextPointCaret(focus) &&
+      anchor.isSameNodeCaret(focus)
+    ) {
+      // Compute the single-node interval directly instead of allocating two
+      // whole-node slices only to replace them with a third slice.
+      return [
+        $getTextPointCaretSlice(anchor, focus.offset - anchor.offset),
+        null,
+      ];
     }
-    return [anchorSlice, focusSlice];
+    return [
+      $isTextPointCaret(anchor)
+        ? $getSliceFromTextPointCaret(anchor, 'anchor')
+        : null,
+      $isTextPointCaret(focus)
+        ? $getSliceFromTextPointCaret(focus, 'focus')
+        : null,
+    ];
   }
   iterNodeCarets(rootMode: RootMode = 'root'): IterableIterator<NodeCaret<D>> {
     const anchor = $isTextPointCaret(this.anchor)
@@ -1122,13 +1130,47 @@ export function $isTextPointCaretSlice<D extends CaretDirection>(
 }
 
 /**
+ * Return the caret if it's in the given direction, otherwise return
+ * caret.getFlipped().
+ *
+ * @param caret Any PointCaret
+ * @param direction The desired direction
+ * @returns A PointCaret in direction
+ */
+export function $getCaretInDirection<
+  Caret extends PointCaret<CaretDirection>,
+  D extends CaretDirection,
+>(
+  caret: Caret,
+  direction: D,
+):
+  | NodeCaret<D>
+  | (Caret extends TextPointCaret<TextNode, CaretDirection>
+      ? TextPointCaret<TextNode, D>
+      : never) {
+  return (caret.direction === direction ? caret : caret.getFlipped()) as
+    | NodeCaret<D>
+    | (Caret extends TextPointCaret<TextNode, CaretDirection>
+        ? TextPointCaret<TextNode, D>
+        : never);
+}
+
+/**
  * Construct a CaretRange that starts at anchor and goes to the end of the
  * document in the anchor caret's direction.
  */
 export function $extendCaretToRange<D extends CaretDirection>(
   anchor: PointCaret<D>,
 ): CaretRange<D> {
-  return $getCaretRange(anchor, $getSiblingCaret($getRoot(), anchor.direction));
+  // Use an in-document point to represent the end,
+  // iteration is inclusive of the endpoint.
+  return $getCaretRange(
+    anchor,
+    $getCaretInDirection(
+      $getChildCaret($getRoot(), flipDirection(anchor.direction)),
+      anchor.direction,
+    ),
+  );
 }
 
 /**
@@ -1240,19 +1282,7 @@ export function $comparePointCaretNext(
   );
   switch (compare.type) {
     case 'same': {
-      const aIsText = a.type === 'text';
-      const bIsText = b.type === 'text';
-      return aIsText && bIsText
-        ? compareNumber(a.offset, b.offset)
-        : a.type === b.type
-          ? 0
-          : aIsText
-            ? -1
-            : bIsText
-              ? 1
-              : a.type === 'child'
-                ? -1
-                : 1;
+      return $compareSameOriginCarets(a, b);
     }
     case 'ancestor': {
       return a.type === 'child' ? -1 : 1;
@@ -1264,6 +1294,147 @@ export function $comparePointCaretNext(
       return $getCommonAncestorResultBranchOrder(compare);
     }
   }
+}
+
+/**
+ * The result of {@link $getCommonAncestorAcrossSlots}: like
+ * {@link CommonAncestorResult}, except that the common ancestor may be a
+ * DecoratorNode slot host, and the child on either side may be one of its
+ * slot values rather than a child.
+ *
+ * @internal @experimental named-slots
+ */
+export type CommonAncestorAcrossSlotsResult =
+  | {readonly type: 'same'; readonly commonAncestor: LexicalNode}
+  | {
+      readonly type: 'ancestor';
+      readonly commonAncestor: LexicalNode;
+      readonly b: LexicalNode;
+    }
+  | {
+      readonly type: 'descendant';
+      readonly commonAncestor: LexicalNode;
+      readonly a: LexicalNode;
+    }
+  | {
+      readonly type: 'branch';
+      readonly commonAncestor: LexicalNode;
+      readonly a: LexicalNode;
+      readonly b: LexicalNode;
+    };
+
+/**
+ * Like {@link $getCommonAncestor}, but a slot value's parent is its host, so
+ * nodes on either side of a slot boundary have a common ancestor. Returns
+ * null when there is none.
+ *
+ * @internal @experimental named-slots
+ */
+export function $getCommonAncestorAcrossSlots(
+  a: LexicalNode,
+  b: LexicalNode,
+): null | CommonAncestorAcrossSlotsResult {
+  // Node key -> the child (or slot value) on the path down to a.
+  const aPath = new Map<NodeKey, LexicalNode | null>();
+  for (
+    let child: LexicalNode | null = null, node: LexicalNode | null = a;
+    node !== null;
+    child = node, node = $getParentAcrossSlots(node)
+  ) {
+    aPath.set(node.getKey(), child);
+  }
+  for (
+    let child: LexicalNode | null = null, node: LexicalNode | null = b;
+    node !== null;
+    child = node, node = $getParentAcrossSlots(node)
+  ) {
+    const aChild = aPath.get(node.getKey());
+    if (aChild === undefined) {
+      continue;
+    }
+    const commonAncestor = node.getLatest();
+    return aChild === null
+      ? child === null
+        ? {commonAncestor, type: 'same'}
+        : {b: child, commonAncestor, type: 'ancestor'}
+      : child === null
+        ? {a: aChild, commonAncestor, type: 'descendant'}
+        : {a: aChild, b: child, commonAncestor, type: 'branch'};
+  }
+  return null;
+}
+
+function $getParentAcrossSlots(node: LexicalNode): LexicalNode | null {
+  return node.getParent() || $getSlotHost(node);
+}
+
+/**
+ * Like {@link $comparePointCaretNext}, but orders points on either side of a
+ * slot boundary in the default slots-before-children rendering order: a
+ * host's slot values, in slot order, come after any point before the host and
+ * before its children. A ChildCaret on the host, the point before its first
+ * child, therefore comes after them. An app can mount slot DOM elsewhere, so
+ * this need not match the DOM order. Returns null when a and b have no common
+ * ancestor.
+ *
+ * @internal @experimental named-slots
+ */
+export function $comparePointCaretNextAcrossSlots(
+  a: PointCaret<'next'>,
+  b: PointCaret<'next'>,
+): null | -1 | 0 | 1 {
+  const compare = $getCommonAncestorAcrossSlots(a.origin, b.origin);
+  if (compare === null) {
+    return null;
+  }
+  switch (compare.type) {
+    case 'same':
+      return $compareSameOriginCarets(a, b);
+    case 'ancestor':
+      return a.type === 'child' && $getSlotHostKey(compare.b) === null ? -1 : 1;
+    case 'descendant':
+      return b.type === 'child' && $getSlotHostKey(compare.a) === null ? 1 : -1;
+    case 'branch': {
+      const aSlotKey = $getSlotHostKey(compare.a) && compare.a.getKey();
+      const bSlotKey = $getSlotHostKey(compare.b) && compare.b.getKey();
+      if (aSlotKey && bSlotKey) {
+        // Two slot values of one host: slot order.
+        for (const key of $getSlotMap(compare.commonAncestor).values()) {
+          if (key === aSlotKey || key === bSlotKey) {
+            return key === aSlotKey ? -1 : 1;
+          }
+        }
+      }
+      // By default a slot value renders before the host's children.
+      return aSlotKey
+        ? -1
+        : bSlotKey
+          ? 1
+          : compare.a.isBefore(compare.b)
+            ? -1
+            : 1;
+    }
+  }
+}
+
+// The order of two carets with the same origin.
+function $compareSameOriginCarets(
+  a: PointCaret<'next'>,
+  b: PointCaret<'next'>,
+): -1 | 0 | 1 {
+  const aIsText = a.type === 'text';
+  const bIsText = b.type === 'text';
+  return aIsText && bIsText
+    ? compareNumber(a.offset, b.offset)
+    : a.type === b.type
+      ? 0
+      : aIsText
+        ? -1
+        : bIsText
+          ? 1
+          : a.type === 'child'
+            ? -1
+            : 1;
 }
 
 /**

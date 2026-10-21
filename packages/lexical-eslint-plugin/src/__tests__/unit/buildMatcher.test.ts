@@ -6,7 +6,10 @@
  *
  */
 
-import {type Identifier} from 'estree';
+// @vitest-environment node
+
+import type {Identifier} from 'estree';
+
 import {describe, expect, it} from 'vitest';
 
 import {buildMatcher} from '../../util/buildMatcher';

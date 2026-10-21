@@ -6,32 +6,38 @@
  *
  */
 
-import type {LexicalNode, SerializedLexicalNode} from '../LexicalNode';
-import type {SerializedElementNode} from './LexicalElementNode';
+import type {LexicalNode, SerializedPartial} from '../LexicalNode';
 
-import invariant from 'shared/invariant';
+import invariant from '@lexical/internal/invariant';
 
 import {NO_DIRTY_NODES} from '../LexicalConstants';
 import {getActiveEditor, isCurrentlyReadOnlyMode} from '../LexicalUpdates';
 import {$getRoot} from '../LexicalUtils';
 import {$isDecoratorNode} from './LexicalDecoratorNode';
-import {$isElementNode, ElementNode} from './LexicalElementNode';
+import {
+  $isElementNode,
+  ElementNode,
+  type SerializedElementNode,
+} from './LexicalElementNode';
 
-export type SerializedRootNode<
-  T extends SerializedLexicalNode = SerializedLexicalNode,
-> = SerializedElementNode<T>;
+export type SerializedRootNode = SerializedElementNode;
+
+function $getCachedText(node: RootNode): string | null {
+  const cachedText = node.getLatest().__cachedText;
+  return cachedText !== null &&
+    (isCurrentlyReadOnlyMode() ||
+      getActiveEditor()._dirtyType === NO_DIRTY_NODES)
+    ? cachedText
+    : null;
+}
 
 /** @noInheritDoc */
 export class RootNode extends ElementNode {
   /** @internal */
   __cachedText: null | string;
 
-  static getType(): string {
-    return 'root';
-  }
-
-  static clone(): RootNode {
-    return new RootNode();
+  $config() {
+    return this.config('root', {extends: ElementNode});
   }
 
   constructor() {
@@ -47,16 +53,13 @@ export class RootNode extends ElementNode {
   }
 
   getTextContent(): string {
-    const cachedText = this.__cachedText;
-    if (
-      isCurrentlyReadOnlyMode() ||
-      getActiveEditor()._dirtyType === NO_DIRTY_NODES
-    ) {
-      if (cachedText !== null) {
-        return cachedText;
-      }
-    }
-    return super.getTextContent();
+    const cachedText = $getCachedText(this);
+    return cachedText !== null ? cachedText : super.getTextContent();
+  }
+
+  getTextContentSize(): number {
+    const cachedText = $getCachedText(this);
+    return cachedText !== null ? cachedText.length : super.getTextContentSize();
   }
 
   remove(): never {
@@ -96,7 +99,9 @@ export class RootNode extends ElementNode {
     return super.splice(start, deleteCount, nodesToInsert);
   }
 
-  static importJSON(serializedNode: SerializedRootNode): RootNode {
+  static importJSON(
+    serializedNode: SerializedPartial<SerializedRootNode>,
+  ): RootNode {
     // We don't create a root, and instead use the existing root.
     return $getRoot().updateFromJSON(serializedNode);
   }
@@ -110,6 +115,7 @@ export function $createRootNode(): RootNode {
   return new RootNode();
 }
 
+/** Returns true if the given node is a RootNode. */
 export function $isRootNode(
   node: RootNode | LexicalNode | null | undefined,
 ): node is RootNode {

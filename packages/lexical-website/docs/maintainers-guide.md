@@ -8,9 +8,9 @@ configurations.
 
 ### Workspaces
 
-The top-level `package.json` uses
-[pnpm workspaces](https://pnpm.io/workspaces) to
-configure the monorepo. This mostly means that all packages share a
+The monorepo is configured with
+[pnpm workspaces](https://pnpm.io/workspaces); the set of workspace
+packages is declared in the top-level `pnpm-workspace.yaml`. This mostly means that all packages share a
 top-level `pnpm-lock.yaml` and `pnpm -C {package} run {command}` is often
 used to run a command from a nested package's package.json.
 
@@ -24,11 +24,17 @@ Some packages in the monorepo do not get published to npm, for example:
   [playground.lexical.dev](https://playground.lexical.dev/) demo site
 * `packages/lexical-website` - the [lexical.dev](https://lexical.dev/)
   docusaurus website that you may even be reading right now
-* `packages/shared` - internal code that is used by more than one repository
-  but should not be a public API
+Internal runtime code shared by more than one package lives in
+`packages/lexical-internal` (`@lexical/internal`). Unlike the others above
+it **is** published, but only so its source resolves through normal package
+resolution (the `source` export condition used by linked-checkout
+consumers); the compiled packages inline it, so it is never executed as a
+separate runtime dependency. It is not a public API and has no semver
+guarantees — see [Developing against a local Lexical
+checkout](./maintainers-guide-link.md).
 
-It is required that these packages, and any other package that should not be
-published to npm, have a `"private": true` property in their `package.json`.
+It is required that private packages, and any other package that should not
+be published to npm, have a `"private": true` property in their `package.json`.
 If you have an in-progress package that will eventually be public, but is
 not ready for consumption, it should probably still be set to
 `"private": true` otherwise the tooling will find it and publish it.
@@ -190,13 +196,40 @@ of these scripts you might as well run them all.
 
 ### pnpm run prepare-release
 
-This runs all of the pre-release steps and will let you inspect the artifacts
-that would be uploaded to npm. Each public package will have a npm directory, e.g.
-`packages/lexical/npm` that contains those artifacts.
+This runs `build-release` to produce all of the artifacts each public
+package needs (the `dev`/`prod` ESM variants plus their fork modules,
+`.d.ts` declarations, and `.js.flow` stubs under
+`packages/<name>/dist/`), then runs the publish-time guard in
+`scripts/npm/prepare-release.mjs` to confirm every path the package's
+`exports`/`main`/`module`/`types` fields reference actually exists on
+disk. The guard fails the build if e.g. you ran `pnpm run build` (dev
+only) and then tried to publish — the `.prod.js` files would be
+missing.
 
-This will also update scripts/error-codes/codes.json, the mapping of
-production error codes to error messages. It's imperative to commit the result
-of this before tagging a release.
+Only ESM is published to npm. Every public package is a
+`"type": "module"` package (`update-version` adds the field), so its
+build is plain `.js`. A CommonJS consumer gets the same files through
+Node's `require(esm)` (Node.js 20.19+), which is why the fork module that
+the exports map's `default` condition resolves to has no top-level await.
+The CommonJS variants are only built for www (`pnpm run build-www`).
+
+Because a `.d.ts` in a `"type": "module"` package is an ES module
+declaration, the build gives the relative imports tsc emits an explicit
+`.js` extension (`from './LexicalEditor.js'`): TypeScript's `nodenext`
+resolution does not resolve extensionless relative imports in ESM, and a
+consumer with `skipLibCheck` would silently get `any` for everything.
+`scripts/__tests__/integration/declaration-resolution.test.mjs` checks
+that a `nodenext` consumer of every entry point still sees the types.
+
+Each package is its own publish root: `packages/<name>/` IS the
+publishable npm package after `build-release`. `pnpm publish` is run
+directly from that directory by `scripts/npm/release.mjs` so pnpm's
+automatic `workspace:*` rewriting and the `files` whitelist do the
+right thing without an intermediate `npm/` copy step.
+
+This will also update `scripts/error-codes/codes.json`, the mapping of
+production error codes to error messages. It's imperative to commit the
+result of this before tagging a release.
 
 ### pnpm run ci-check
 
@@ -224,6 +257,110 @@ Run the unit tests
 
 Run eslint
 
+### pnpm run generate-node-json
+
+Regenerate the specialized JSON serialization code for the built-in node
+classes. A node's [serialization schema](/docs/serialization/#declarative-serialization-schemas-with-config)
+states everything about a serialized property ahead of time — which accessor
+or field it uses, what its default is, what its domain admits — so the
+generic walk over that schema can be compiled into straight-line code. This
+script does that compiling; the output is checked in.
+
+It writes one module per package, beside the nodes it serializes:
+
+| Module | Classes |
+| --- | --- |
+| `packages/lexical/src/LexicalGeneratedJSON.ts` | ElementNode, TextNode, ParagraphNode, LineBreakNode, TabNode |
+| `packages/lexical-rich-text/src/LexicalRichTextGeneratedJSON.ts` | HeadingNode, QuoteNode |
+| `packages/lexical-link/src/LexicalLinkGeneratedJSON.ts` | LinkNode, AutoLinkNode |
+| `packages/lexical-mark/src/LexicalMarkGeneratedJSON.ts` | MarkNode |
+| `packages/lexical-list/src/LexicalListGeneratedJSON.ts` | ListNode, ListItemNode |
+| `packages/lexical-table/src/LexicalTableGeneratedJSON.ts` | TableNode, TableRowNode, TableCellNode |
+| `packages/lexical-code-core/src/LexicalCodeCoreGeneratedJSON.ts` | CodeNode, CodeHighlightNode |
+| `packages/lexical-react/src/shared/LexicalReactGeneratedJSON.ts` | DecoratorBlockNode |
+
+Each class receives its own generated code through its `$config`'s
+`generated` property, so nothing has to match code to class by type string at
+runtime. What the property holds is a factory: registration calls it with the
+class's composed schema, and the generated code reads the lookup tables it
+needs (`getterTable`, `setterTable`, `aliasedValue`'s) off that schema through
+`getterTableOf`, `setterTableOf` and `aliasTableOf`, so a generated module
+carries no copy of a table and nothing about a table's contents is written at
+build time — only its type, so the field a value is assigned to is still
+checked. A subclass inherits the code along with the schema when its compiled
+accessor tables are the ones the code was generated from — checked entry for
+entry at registration — and runs it over its own schema, while one that
+overrides an accessor a field stands in for, or declares a serialized property
+of its own, resolves differently and takes the schema-driven walk instead.
+Generated exporters read `type` off the node for the same reason.
+
+Three things are worth knowing before touching it:
+
+- **The output is verified, not trusted.** The import direction is the
+  untrusted-JSON boundary, so every generated parser is run against the schema
+  it was compiled from over a corpus drawn from that schema plus a fixed set of
+  hostile values (`'__proto__'`, `'toString'`, `'1e999'`, …). A property whose
+  schema cannot be compiled faithfully takes its class out of the import half
+  rather than shipping a parser that disagrees with the walk — the script says
+  so on stdout when it happens.
+- **A stale checkout fails the tests.** `LexicalGeneratedJSON.test.ts`
+  regenerates into a temporary directory and compares every file byte for
+  byte, and separately asserts that each generated exporter agrees with the
+  schema-driven walk for both the legacy and compact forms. Change a schema
+  without rerunning this script and that test fails.
+- **Two lists, deliberately.** The script runs in two phases, because reading
+  the schemas means importing the packages and each package imports the file
+  the script writes for it. Phase one replaces every output with a valid
+  do-nothing stub from the static `MANIFEST` in
+  `scripts/shared/generateNodeJSONManifest.mjs` so the imports always succeed;
+  phase two re-enters under `tsx` and writes the real thing from `PACKAGES` in
+  `scripts/shared/generateNodeJSON.mjs`, which is also what the drift test
+  runs in-process. Adding a class means editing both lists, and the generation
+  fails loudly if they disagree.
+
+The compact form compares each property against its default. A primitive
+default is a literal; a reference-typed default has no literal a value could
+be `===`, so it gets the structural test the schema's own equality reduces to
+where that can be stated — MarkNode's `ids`, whose default is an empty array,
+becomes a length test — and every emitted comparison is verified against that
+equality over a corpus, the way a parse is. A default the generator cannot
+state that way (an object, a non-empty array, a non-finite number) takes the
+class out of the compact half only: the script says so on stdout and the other
+forms are generated as usual. A class that carries flat NodeState is generated
+like any other; the walk applies the state before handing the node to the
+generated parser, the mirror of how export appends it after the generated
+literal.
+
+`afterCloneFrom` is generated too, and is the one direction whose fallback is
+not the walk. A schema field is where a property is *stored*, so every class
+that declares one gets an `afterCloneFrom` synthesized at registration —
+generated straight-line code when the class has some, and otherwise a loop over
+the field names — copying the fields that class's own `$config` declared and
+delegating the rest through `super`, which is why the emitted function covers
+one class's own fields and nothing above it. A field an ancestor declares too
+is left to the ancestor, whose method has already assigned it: re-declaring an
+inherited property changes how it is serialized, not where it is stored, so a
+class that only re-declares gets no method at all — `TabNode`, which restates
+`TextNode`'s `text`, `detail` and `mode`, is the in-tree case and simply
+inherits `TextNode`'s. Both accessor directions are read
+for a field name, and the declared field is used rather than the one
+`resolveGetterAccessor` resolves to: an override changes how a property is
+serialized, not where it lives. A class that writes its own `afterCloneFrom` is
+left alone and owns all of its properties, which is how `ElementNode` keeps
+carrying `__first`/`__last`/`__size` and its slot bookkeeping; so is a property
+declared through accessor methods on both sides, which names no field for
+anything to copy. No in-tree node is in that second position — a property held
+in a field says so with `setter: {field, method}` and stays derived, as
+`MarkNode`'s `ids` does — so the boilerplate that remains is `ElementNode`'s
+and `CodeNode`'s, and each of those calls the generated `afterClone<Class>`
+for its schema half and writes only the fields no schema describes.
+`ownSchemaFields` in `LexicalUtils.ts` is the single definition of that field
+list, called by both the generator and the synthesized fallback.
+
+The schema-to-JavaScript compiler itself lives in `@lexical/compiler`'s
+`SchemaJsonCodegen` entry point, so it is testable independently of the
+generator that drives it.
+
 ## Scripts for release managers
 
 ### pnpm run extract-codes
@@ -247,12 +384,15 @@ Increment the monorepo version. The `-i` argument must be one of
 `minor` | `patch` | `prerelease`.
 
 The postversion script will:
-- Create a local `${npm_package_version}__release` branch
+- Create a local `${CHANNEL}__release` branch (the version-named
+  `${npm_package_version}__release` branch is only a remote push target,
+  and only when the channel is not `nightly`)
 - `pnpm run update-version` to update example and sub-package monorepo dependencies
 - `pnpm install` to update the pnpm-lock.yaml
 - `pnpm run update-packages` to update other generated config
-- `pnpm run extract-codes` to extract the error codes
-- `pnpm run update-changelog` to update the changelog (if it's not a prerelease)
+- `pnpm run extract-codes` to extract the error codes and
+  `pnpm run update-changelog` to update the changelog (both only when
+  `CHANNEL` is `latest`)
 - Create a version commit and tag from the branch
 
 This is typically executed through the `version.yml` GitHub Workflow which
@@ -268,6 +408,178 @@ Update the changelog from git history.
 plus creating a tag in git, and likely other steps.
 
 Runs prepare-release to do a full build and then uploads to npm.
+
+### pnpm run setup-trusted-publishing
+
+One-time (idempotent) helper to register every public package with
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers).
+Re-run it whenever a new public package is added.
+
+#### Prerequisites
+
+- Node.js — whatever the repo's root `package.json#engines.node` says (currently `>=20.19.0`). Running with Node 24+ is recommended because that's what CI uses for publishes.
+- pnpm — pinned by `package.json#packageManager` (currently `pnpm@11.24.0`). Activate with [corepack](https://nodejs.org/api/corepack.html) or install directly.
+- npm CLI — **`npm ≥ 11.10`** (`npm i -g npm@latest`). The `npm trust` subcommand was added in npm 11; older versions will fail the preflight check.
+- An authenticated npm session (`npm login --registry https://registry.npmjs.org`) on a publisher account that has **account-level 2FA enabled** and write access to every `@lexical/*` package.
+
+#### Usage
+
+Run in check-only mode first:
+
+```bash
+pnpm run setup-trusted-publishing
+```
+
+For each public package in the monorepo, it queries
+`https://registry.npmjs.org` and reports whether the name is already
+claimed. Packages that *don't* exist on the registry are listed; you
+can re-run with `--bootstrap` to publish a deprecated
+`0.0.0-bootstrap.0` placeholder under the `bootstrap` dist-tag so the
+name can be claimed:
+
+```bash
+npm login --registry https://registry.npmjs.org
+pnpm run setup-trusted-publishing --bootstrap
+```
+
+Once a package exists on the registry, you can configure trusted
+publishing for it programmatically by adding `--setup-trust`. This
+runs `npm trust github` under the hood (requires `npm` ≥ 11.10 and an
+authenticated session with account-level 2FA on the publishing
+account), and is idempotent — the script reads the existing trust
+configuration for each package via a read-only registry call (no OTP)
+and skips packages whose config already matches:
+
+```bash
+npm login --registry https://registry.npmjs.org
+pnpm run setup-trusted-publishing --setup-trust
+```
+
+`npm trust github` is a write operation, so each package that *does*
+need configuring will trigger a one-time-password / web-auth prompt.
+On the first prompt npm prints a URL; open it in a browser, sign in,
+and tick **"Skip two-factor authentication for the next 5 minutes"**.
+Subsequent packages in the same run will then go through without
+re-prompting. The script also inserts a small (~2 s) pause between
+calls to stay under the registry's `E429` rate limit.
+
+For full first-time setup of a brand-new monorepo, combine both flags:
+
+```bash
+pnpm run setup-trusted-publishing --bootstrap --setup-trust
+```
+
+When adding a **single** new package to an existing monorepo — the common
+case going forward — pass its name so the run only touches that package
+instead of re-checking all 30+ already-configured ones (which just prints a
+wall of `CONFLICT` lines). The name can be the full npm name or the unscoped
+short name, and `--package` / positional args are interchangeable and
+repeatable:
+
+```bash
+pnpm run setup-trusted-publishing --bootstrap --setup-trust @lexical/a11y
+# equivalently: --package a11y
+```
+
+Useful flags:
+
+- `--package <name>` (or a positional `<name>`, repeatable) — restrict the run to the given package(s), matched by full npm name (`@lexical/a11y`) or unscoped short name (`a11y`). Omit to process every public package.
+- `--dry-run` — print what would happen without touching the registry (works with both `--bootstrap` and `--setup-trust`)
+- `--workflow <filename>` — override the workflow filename (default `pre-release.yml`)
+- `--repo <owner/name>` — override the GitHub repo (default `facebook/lexical`)
+- `--stub-version <semver>` — override the placeholder version (default `0.0.0-bootstrap.0`)
+- `--registry <url>` — override the npm registry
+
+In the default (check-only) mode the script also prints the npmjs.com
+`/access` URL for each existing package and the exact values to enter
+manually, as a fallback for when `npm trust github` isn't an option.
+
+### Testing trusted publishing from a PR branch
+
+The "Publish to NPM" workflow (`pre-release.yml`) exposes `ref`,
+`channel`, and `increment-version` inputs so it doubles as a test
+harness. Picking a branch in the "Run workflow" dropdown selects
+which version of the workflow files run, and the inputs determine
+what actually gets published. The workflow has no NPM_TOKEN secret to
+fall back on — publishes always go through OIDC trusted publishing —
+so a misconfigured trust setup fails loudly rather than silently
+falling through to token auth.
+
+A safe end-to-end test looks like:
+
+| Input | Value |
+| -- | -- |
+| Branch (dropdown) | your PR branch |
+| `ref` | your PR branch (same value) |
+| `channel` | `dev` |
+| `increment-version` | checked |
+| `ignore-previously-published` | unchecked |
+
+With `increment-version` on, the run bumps `package.json` to a fresh
+prerelease (e.g. `0.46.0-dev.0`), commits + tags it on a `dev__release`
+branch on origin, and publishes the monorepo under the `dev` dist-tag
+via OIDC. The `latest` tag is untouched, so default `npm install`
+users are unaffected. After it succeeds:
+
+```bash
+npm view lexical@dev version     # → the just-published prerelease
+npm view lexical@latest version  # → unchanged
+```
+
+Cleanup (the prerelease itself can't be reused, but the git refs
+should go):
+
+```bash
+git push --delete origin v0.46.0-dev.0 dev__release 0.46.0-dev.0__release
+```
+
+The `increment-version=true + channel=latest` combination is refused
+by the workflow's guard job — real `latest` releases must go through
+`version.yml` first.
+
+## Continuous releases (pkg.pr.new)
+
+Every commit to a pull request and every commit to `main` publishes all public
+packages to [pkg.pr.new](https://github.com/stackblitz-labs/pkg.pr.new) through
+the `pkg-pr-new.yml` workflow. Nothing goes to npm: the nightly, next and latest
+channels above are unchanged and still publish through `call-release.yml`.
+
+```sh
+npm i https://pkg.pr.new/lexical@9372      # latest commit of PR #9372
+npm i https://pkg.pr.new/lexical@4282a68   # a specific commit
+npm i https://pkg.pr.new/lexical@main      # tip of main
+```
+
+The bot comments install commands on each pull request. Previews are built
+with `pnpm run prepare-release`, the same build as the npm channels, after
+`scripts/npm/preview-version.mjs` stamps a version in the nightly line:
+`0.52.1-pr.9372.g4282a68` for a PR and `0.52.1-main.g4282a68` for `main`, next
+to `0.52.1-nightly.20261019.0` on npm. That version is also what
+`LexicalEditor.version` reports. Dependencies between Lexical packages are
+rewritten to the same commit's pkg.pr.new URLs, so `@lexical/react` from a
+preview depends on `lexical` from that preview, not on an npm release.
+
+The bot's comment lists npm commands, and npm dedupes those dependencies by
+name and version, so `@9372` or `@main` URLs are fine. pnpm and yarn key URL
+dependencies by URL instead: install with the long commit URLs that the
+packages use for each other, or you get more than one copy of `lexical`. pnpm
+11+ also refuses URL dependencies of URL dependencies unless
+`blockExoticSubdeps` is off. Each run's job summary lists these commands:
+
+```sh
+pnpm add --config.block-exotic-subdeps=false \
+  lexical@https://pkg.pr.new/facebook/lexical/lexical@4282a68 \
+  @lexical/react@https://pkg.pr.new/facebook/lexical/@lexical/react@4282a68
+yarn add \
+  lexical@https://pkg.pr.new/facebook/lexical/lexical@4282a68 \
+  @lexical/react@https://pkg.pr.new/facebook/lexical/@lexical/react@4282a68
+```
+
+On a cold cache, yarn 1 can fail with "the file appears to be corrupt" while
+it downloads the same URL for several packages at once. Run it again.
+
+The workflow requires the [pkg.pr.new GitHub App](https://github.com/apps/pkg-pr-new)
+to be installed on the repository.
 
 ## Release Procedure
 
@@ -285,7 +597,6 @@ from main in step 4).
 4. After PR is merged to main, publish to NPM with the Github Actions "Publish to NPM" workflow (`pre-release.yml`)
 5. Create a GitHub release from the tag created in step 1, manually editing the release notes
 6. Announce the release in #announcements on Discord
-7. If a post-release-* version branch was created, raise a PR against it (may be created by `call-post-release.yml` via `pre-release.yml`) to update the examples. Since v0.44.0 this is no longer likely because we do not commit lockfiles for examples.
 
 ## Release Protocol
 

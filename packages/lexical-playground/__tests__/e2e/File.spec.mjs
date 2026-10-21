@@ -15,18 +15,21 @@ import {
   initialize,
   insertUploadImage,
   IS_COLLAB_V2,
-  sleep,
   test,
   waitForSelector,
 } from '../utils/index.mjs';
+
+// TODO(collab-v2): nested editors are not supported yet
+test.skip(
+  ({isPlainText}) => isPlainText || IS_COLLAB_V2,
+  'Requires rich text without collaboration v2',
+);
 
 test.use({acceptDownloads: true});
 test.describe('File', () => {
   test.beforeEach(({isCollab, page}) => initialize({isCollab, page}));
 
-  test(`Can import/export`, async ({page, isPlainText}) => {
-    // TODO(collab-v2): nested editors are not supported yet
-    test.skip(isPlainText || IS_COLLAB_V2);
+  test(`Can import/export`, async ({page}) => {
     await focusEditor(page);
     await toggleBold(page);
     await page.keyboard.type('Hello');
@@ -73,7 +76,7 @@ test.describe('File', () => {
                 style="height: inherit; max-width: 500px; width: inherit;" />
             </div>
           </span>
-          <br />
+          <br data-lexical-managed-linebreak="true" />
         </li>
       </ol>
     `;
@@ -92,7 +95,9 @@ test.describe('File', () => {
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
 
@@ -100,8 +105,10 @@ test.describe('File', () => {
       fileChooser.setFiles([filePath]);
     });
     await click(page, '.action-button.import');
-    await sleep(200);
 
+    // The import reads and parses the file asynchronously; assertHTML retries
+    // until the imported document replaces the empty editor, so no fixed wait
+    // is needed.
     await assertHTML(page, expectedHtml);
   });
 });

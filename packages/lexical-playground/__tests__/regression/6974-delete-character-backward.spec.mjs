@@ -11,12 +11,18 @@ import {
   moveToLineBeginning,
 } from '../keyboardShortcuts/index.mjs';
 import {
+  assertCaret,
   assertHTML,
   focusEditor,
   html,
   initialize,
   test,
 } from '../utils/index.mjs';
+
+test.skip(
+  ({isCollab, isPlainText}) => isCollab || isPlainText,
+  'Requires rich text without collaboration',
+);
 
 test.describe('Regression tests for #6974', () => {
   test.beforeEach(({isPlainText, isCollab, page}) =>
@@ -25,10 +31,7 @@ test.describe('Regression tests for #6974', () => {
 
   test(`deleteCharacter merges children from adjacent blocks even if the previous leaf is an inline decorator`, async ({
     page,
-    isCollab,
-    isPlainText,
   }) => {
-    test.skip(isCollab || isPlainText);
     await focusEditor(page);
     const testEquation = '$x$';
     const testString = 'test';
@@ -37,13 +40,17 @@ test.describe('Regression tests for #6974', () => {
     await page.keyboard.type(testString);
     const beforeHtml = html`
       <p dir="auto">
-        <span contenteditable="false" data-lexical-decorator="true">
+        <span
+          contenteditable="false"
+          role="math"
+          aria-label="Equation: x"
+          data-lexical-decorator="true">
           <img
             alt=""
             height="0"
             src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
             width="0" />
-          <span role="button" tabindex="-1">
+          <span>
             <span>
               <span aria-hidden="true">
                 <span>
@@ -59,7 +66,7 @@ test.describe('Regression tests for #6974', () => {
             src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
             width="0" />
         </span>
-        <br />
+        <br data-lexical-managed-linebreak="true" />
       </p>
       <p dir="auto"><span data-lexical-text="true">test</span></p>
     `;
@@ -68,16 +75,21 @@ test.describe('Regression tests for #6974', () => {
       ignoreInlineStyles: true,
     });
     await moveToLineBeginning(page);
+    await assertCaret(page, ':scope > p:last-child > span', 0);
     await deleteBackward(page);
     const afterHtml = html`
       <p dir="auto">
-        <span contenteditable="false" data-lexical-decorator="true">
+        <span
+          contenteditable="false"
+          role="math"
+          aria-label="Equation: x"
+          data-lexical-decorator="true">
           <img
             alt=""
             height="0"
             src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
             width="0" />
-          <span role="button" tabindex="-1">
+          <span>
             <span>
               <span aria-hidden="true">
                 <span>

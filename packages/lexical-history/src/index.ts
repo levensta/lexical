@@ -6,17 +6,18 @@
  *
  */
 
-import type {EditorState, LexicalEditor, LexicalNode, NodeKey} from 'lexical';
-
 import {
   batch,
   effect,
   getPeerDependencyFromEditor,
+  type HMRExtension,
   namedSignals,
-  ReadonlySignal,
+  type ReadonlySignal,
+  type Signal,
+  signal,
 } from '@lexical/extension';
-import {mergeRegister} from '@lexical/utils';
 import {
+  $isElementNode,
   $isRangeSelection,
   $isRootNode,
   $isTextNode,
@@ -28,10 +29,17 @@ import {
   COMPOSITION_END_TAG,
   COMPOSITION_START_TAG,
   configExtension,
+  CUT_TAG,
   defineExtension,
+  type EditorState,
   HISTORIC_TAG,
   HISTORY_MERGE_TAG,
   HISTORY_PUSH_TAG,
+  type LexicalEditor,
+  type LexicalNode,
+  mergeRegister,
+  type NodeKey,
+  PASTE_TAG,
   REDO_COMMAND,
   safeCast,
   UNDO_COMMAND,
@@ -53,10 +61,17 @@ export type HistoryStateEntry = {
   editor: LexicalEditor;
   editorState: EditorState;
 };
+/**
+ * The undo/redo history maintained by the history plugin: the `current` entry
+ * plus the `undoStack` and `redoStack` of previous and future
+ * {@link HistoryStateEntry}s. Create an empty one with
+ * {@link createEmptyHistoryState} and pass it to the history plugin to share
+ * history across editors.
+ */
 export type HistoryState = {
   current: null | HistoryStateEntry;
-  redoStack: Array<HistoryStateEntry>;
-  undoStack: Array<HistoryStateEntry>;
+  redoStack: HistoryStateEntry[];
+  undoStack: HistoryStateEntry[];
 };
 
 type IntentionallyMarkedAsDirtyElement = boolean;
@@ -65,7 +80,7 @@ function getDirtyNodes(
   editorState: EditorState,
   dirtyLeaves: Set<NodeKey>,
   dirtyElements: Map<NodeKey, IntentionallyMarkedAsDirtyElement>,
-): Array<LexicalNode> {
+): LexicalNode[] {
   const nodeMap = editorState._nodeMap;
   const nodes = [];
 
@@ -233,6 +248,36 @@ function isTextNodeUnchanged(
   return false;
 }
 
+function $serializeNode(node: LexicalNode): string {
+  return JSON.stringify([
+    node.exportJSON(),
+    $isElementNode(node) ? node.getChildrenKeys() : null,
+  ]);
+}
+
+function areNodesUnchanged(
+  keys: Set<NodeKey>,
+  prevEditorState: EditorState,
+  nextEditorState: EditorState,
+): boolean {
+  for (const key of keys) {
+    const prevNode = prevEditorState._nodeMap.get(key);
+    const nextNode = nextEditorState._nodeMap.get(key);
+    if (prevNode === nextNode) {
+      continue;
+    }
+    if (
+      !prevNode ||
+      !nextNode ||
+      prevEditorState.read(() => $serializeNode(prevNode)) !==
+        nextEditorState.read(() => $serializeNode(nextNode))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function createMergeActionGetter(
   editor: LexicalEditor,
   delayOrStore: number | ReadonlySignal<number>,
@@ -250,6 +295,8 @@ function createMergeActionGetter(
   let compositionStartTime = prevChangeTime;
   let compositionStartChangeType = OTHER;
   let compositionStartState: EditorState | null = null;
+  // Include every update in the composition, not only its final deletion.
+  const compositionDirtyKeys = new Set<NodeKey>();
 
   return (
     prevEditorState,
@@ -265,6 +312,15 @@ function createMergeActionGetter(
       compositionStartTime = prevChangeTime;
       compositionStartChangeType = prevChangeType;
       compositionStartState = prevEditorState;
+      compositionDirtyKeys.clear();
+    }
+    if (compositionStartState !== null) {
+      for (const key of dirtyLeaves) {
+        compositionDirtyKeys.add(key);
+      }
+      for (const key of dirtyElements.keys()) {
+        compositionDirtyKeys.add(key);
+      }
     }
 
     // If applying changes from history stack there's no need
@@ -272,6 +328,8 @@ function createMergeActionGetter(
     if (tags.has(HISTORIC_TAG)) {
       prevChangeType = OTHER;
       prevChangeTime = changeTime;
+      compositionStartState = null;
+      compositionDirtyKeys.clear();
       return DISCARD_HISTORY_CANDIDATE;
     }
 
@@ -282,20 +340,46 @@ function createMergeActionGetter(
       prevEditorState = compositionStartState;
     }
 
-    const changeType = getChangeType(
-      prevEditorState,
-      nextEditorState,
-      dirtyLeaves,
-      dirtyElements,
-      editor.isComposing(),
-    );
+    // A paste or cut is never a continuation of the surrounding typing, so
+    // classify it as OTHER. This both prevents it from merging into the
+    // preceding keystrokes and, because it becomes `prevChangeType`, stops the
+    // following keystrokes from merging into it — giving the clipboard
+    // operation its own undo entry (see #8609). Centralizing this here means any
+    // update carrying these tags gets an undo boundary, regardless of which
+    // handler produced it.
+    const changeType =
+      tags.has(PASTE_TAG) || tags.has(CUT_TAG)
+        ? OTHER
+        : getChangeType(
+            prevEditorState,
+            nextEditorState,
+            dirtyLeaves,
+            dirtyElements,
+            editor.isComposing(),
+          );
 
+    let isUnchangedComposition = false;
     const mergeAction = (() => {
       const isSameEditor =
         currentHistoryEntry === null || currentHistoryEntry.editor === editor;
       const shouldPushHistory = tags.has(HISTORY_PUSH_TAG);
       const shouldMergeHistory =
         !shouldPushHistory && isSameEditor && tags.has(HISTORY_MERGE_TAG);
+
+      if (
+        isCompositionEnd &&
+        compositionStartState !== null &&
+        isSameEditor &&
+        !shouldPushHistory &&
+        areNodesUnchanged(
+          compositionDirtyKeys,
+          compositionStartState,
+          nextEditorState,
+        )
+      ) {
+        isUnchangedComposition = true;
+        return HISTORY_MERGE;
+      }
 
       if (shouldMergeHistory) {
         return HISTORY_MERGE;
@@ -333,8 +417,11 @@ function createMergeActionGetter(
       }
 
       // A single node might have been marked as dirty, but not have changed
-      // due to some node transform reverting the change.
-      if (dirtyLeaves.size === 1) {
+      // due to some node transform reverting the change. An explicit
+      // HISTORY_PUSH_TAG always asks for its own entry, so it must not be
+      // merged away here even when the only dirty leaf is an unchanged
+      // TextNode (see #9217).
+      if (!shouldPushHistory && dirtyLeaves.size === 1) {
         const dirtyLeafKey = Array.from(dirtyLeaves)[0];
         if (
           isTextNodeUnchanged(dirtyLeafKey, prevEditorState, nextEditorState)
@@ -346,32 +433,101 @@ function createMergeActionGetter(
       return HISTORY_PUSH;
     })();
 
-    prevChangeTime = changeTime;
-    prevChangeType = changeType;
+    if (isCompositionEnd) {
+      compositionStartState = null;
+      compositionDirtyKeys.clear();
+    }
+    if (!isUnchangedComposition) {
+      prevChangeTime = changeTime;
+      prevChangeType = changeType;
+    }
 
     return mergeAction;
   };
 }
 
-function redo(editor: LexicalEditor, historyState: HistoryState): void {
+/**
+ * Build the entry that reverses `historyStateEntry` and belongs on the
+ * opposite stack.
+ *
+ * With a single editor this is always `current`, since `current` tracks the
+ * live state of that editor. With a shared {@link HistoryState} the stacks
+ * interleave entries from several editors, so `current` may belong to an
+ * editor that is *not* about to change — pushing it would record a no-op and
+ * lose the state we are about to overwrite. In that case read the live state
+ * off the entry's own editor instead.
+ */
+function getInverseEntry(
+  historyStateEntry: HistoryStateEntry,
+  current: null | HistoryStateEntry,
+): null | HistoryStateEntry {
+  if (current !== null && current.editor === historyStateEntry.editor) {
+    return current;
+  }
+  const {editor} = historyStateEntry;
+  const editorState = editor.getEditorState();
+  // An empty EditorState can not be restored (setEditorState throws), so
+  // there is nothing to reverse to.
+  return editorState.isEmpty() ? null : {editor, editorState};
+}
+
+/**
+ * Build the entry that an update from `editor` pushes onto the undo stack.
+ *
+ * `current` is the state to restore when this update is undone, but with a
+ * shared {@link HistoryState} it may belong to a different editor — one that
+ * is not changing here, so restoring it would be a no-op and the state that is
+ * about to be overwritten would never make it onto the stack. Record this
+ * editor's own pre-update state in that case.
+ */
+function getUndoEntry(
+  editor: LexicalEditor,
+  prevEditorState: EditorState,
+  current: null | HistoryStateEntry,
+): null | HistoryStateEntry {
+  if (current === null) {
+    return null;
+  }
+  if (current.editor === editor) {
+    return {...current};
+  }
+  // An empty EditorState can not be restored (setEditorState throws). Skipping
+  // it mirrors the way the first update of an editor is not undoable.
+  return prevEditorState.isEmpty()
+    ? null
+    : {editor, editorState: prevEditorState};
+}
+
+function redo(
+  editor: LexicalEditor,
+  historyState: HistoryState,
+  onChange?: (state: HistoryState) => void,
+): void {
   const redoStack = historyState.redoStack;
   const undoStack = historyState.undoStack;
 
   if (redoStack.length !== 0) {
     const current = historyState.current;
-
-    if (current !== null) {
-      undoStack.push(current);
-      editor.dispatchCommand(CAN_UNDO_COMMAND, true);
-    }
-
     const historyStateEntry = redoStack.pop();
+
+    if (historyStateEntry) {
+      const inverseEntry = getInverseEntry(historyStateEntry, current);
+
+      if (inverseEntry !== null) {
+        undoStack.push(inverseEntry);
+        editor.dispatchCommand(CAN_UNDO_COMMAND, true);
+      }
+    }
 
     if (redoStack.length === 0) {
       editor.dispatchCommand(CAN_REDO_COMMAND, false);
     }
 
     historyState.current = historyStateEntry || null;
+
+    if (onChange) {
+      onChange(historyState);
+    }
 
     if (historyStateEntry) {
       historyStateEntry.editor.setEditorState(historyStateEntry.editorState, {
@@ -381,7 +537,11 @@ function redo(editor: LexicalEditor, historyState: HistoryState): void {
   }
 }
 
-function undo(editor: LexicalEditor, historyState: HistoryState): void {
+function undo(
+  editor: LexicalEditor,
+  historyState: HistoryState,
+  onChange?: (state: HistoryState) => void,
+): void {
   const redoStack = historyState.redoStack;
   const undoStack = historyState.undoStack;
   const undoStackLength = undoStack.length;
@@ -390,9 +550,13 @@ function undo(editor: LexicalEditor, historyState: HistoryState): void {
     const current = historyState.current;
     const historyStateEntry = undoStack.pop();
 
-    if (current !== null) {
-      redoStack.push(current);
-      editor.dispatchCommand(CAN_REDO_COMMAND, true);
+    if (historyStateEntry) {
+      const inverseEntry = getInverseEntry(historyStateEntry, current);
+
+      if (inverseEntry !== null) {
+        redoStack.push(inverseEntry);
+        editor.dispatchCommand(CAN_REDO_COMMAND, true);
+      }
     }
 
     if (undoStack.length === 0) {
@@ -400,6 +564,10 @@ function undo(editor: LexicalEditor, historyState: HistoryState): void {
     }
 
     historyState.current = historyStateEntry || null;
+
+    if (onChange) {
+      onChange(historyState);
+    }
 
     if (historyStateEntry) {
       historyStateEntry.editor.setEditorState(historyStateEntry.editorState, {
@@ -409,10 +577,16 @@ function undo(editor: LexicalEditor, historyState: HistoryState): void {
   }
 }
 
-function clearHistory(historyState: HistoryState) {
+function clearHistory(
+  historyState: HistoryState,
+  onChange?: (state: HistoryState) => void,
+): void {
   historyState.undoStack = [];
   historyState.redoStack = [];
   historyState.current = null;
+  if (onChange) {
+    onChange(historyState);
+  }
 }
 
 /**
@@ -422,6 +596,18 @@ function clearHistory(historyState: HistoryState) {
  * @param historyState - The history state, containing the current state and the undo/redo stack.
  * @param delay - The time (in milliseconds) the editor should delay generating a new history stack,
  * instead of merging the current changes with the current stack.
+ * @param dateNow - The clock function used for delay-based merging.
+ * @param onHistoryStateChange - Optional callback invoked once on registration
+ * and again any time `historyState` is mutated (push, pop, clear, etc.). It is
+ * NOT invoked when a candidate update is discarded without changing the
+ * stacks. Useful for keeping derived values (e.g. signals) in sync with the
+ * current `HistoryState`.
+ * @param maxDepth - The maximum number of entries the undo stack may hold.
+ * When the cap is exceeded a new history event has been pushed the oldest
+ * entries are dropped from the front of the stack until the stack length is
+ * `maxDepth`. Pass `null` (the default) to keep the stack unbounded — the
+ * historical behavior. May be a plain number or a `ReadonlySignal<number | null>`
+ * for reactive reconfiguration.
  * @returns The listeners cleanup callback function.
  */
 export function registerHistory(
@@ -429,8 +615,20 @@ export function registerHistory(
   historyState: HistoryState,
   delay: number | ReadonlySignal<number>,
   dateNow: () => number = Date.now,
+  onHistoryStateChange?: (state: HistoryState) => void,
+  maxDepth: number | null | ReadonlySignal<number | null> = null,
 ): () => void {
   const getMergeAction = createMergeActionGetter(editor, delay, dateNow);
+  const readMaxDepth = (): number | null =>
+    typeof maxDepth === 'number' || maxDepth === null
+      ? maxDepth
+      : maxDepth.peek();
+
+  const notifyChange = () => {
+    if (onHistoryStateChange) {
+      onHistoryStateChange(historyState);
+    }
+  };
 
   const applyChange = ({
     editorState,
@@ -469,10 +667,18 @@ export function registerHistory(
         editor.dispatchCommand(CAN_REDO_COMMAND, false);
       }
 
-      if (current !== null) {
-        undoStack.push({
-          ...current,
-        });
+      const undoEntry = getUndoEntry(editor, prevEditorState, current);
+
+      if (undoEntry !== null) {
+        undoStack.push(undoEntry);
+        const cap = readMaxDepth();
+        if (cap !== null && undoStack.length > cap) {
+          // FIFO-evict the oldest entries so the stack stays at `cap`.
+          // Editing the array in place keeps the same `historyState.undoStack`
+          // reference that callers (e.g. SharedHistoryExtension) may hold on
+          // to.
+          undoStack.splice(0, undoStack.length - cap);
+        }
         editor.dispatchCommand(CAN_UNDO_COMMAND, true);
       }
     } else if (mergeAction === DISCARD_HISTORY_CANDIDATE) {
@@ -484,13 +690,18 @@ export function registerHistory(
       editor,
       editorState,
     };
+    notifyChange();
   };
+
+  // Allow consumers (e.g. HistoryExtension) to read pre-populated stacks
+  // immediately, without waiting for the first edit.
+  notifyChange();
 
   return mergeRegister(
     editor.registerCommand(
       UNDO_COMMAND,
       () => {
-        undo(editor, historyState);
+        undo(editor, historyState, onHistoryStateChange);
         return true;
       },
       COMMAND_PRIORITY_EDITOR,
@@ -498,7 +709,7 @@ export function registerHistory(
     editor.registerCommand(
       REDO_COMMAND,
       () => {
-        redo(editor, historyState);
+        redo(editor, historyState, onHistoryStateChange);
         return true;
       },
       COMMAND_PRIORITY_EDITOR,
@@ -506,7 +717,7 @@ export function registerHistory(
     editor.registerCommand(
       CLEAR_EDITOR_COMMAND,
       () => {
-        clearHistory(historyState);
+        clearHistory(historyState, onHistoryStateChange);
         return false;
       },
       COMMAND_PRIORITY_EDITOR,
@@ -514,7 +725,7 @@ export function registerHistory(
     editor.registerCommand(
       CLEAR_HISTORY_COMMAND,
       () => {
-        clearHistory(historyState);
+        clearHistory(historyState, onHistoryStateChange);
         editor.dispatchCommand(CAN_REDO_COMMAND, false);
         editor.dispatchCommand(CAN_UNDO_COMMAND, false);
         return true;
@@ -555,39 +766,136 @@ export interface HistoryConfig {
    * The now() function, defaults to Date.now.
    */
   now: () => number;
+  /**
+   * The maximum number of entries the undo stack may hold. When the cap is
+   * exceeded the oldest entries are dropped (FIFO) so the stack stays at this
+   * length. Defaults to `null`, which keeps the stack unbounded — the
+   * historical behavior. Setting a finite cap is recommended for editors that
+   * may receive a very large number of distinct history events (long writing
+   * sessions, automated input, etc.) since each entry retains a full
+   * `EditorState` snapshot.
+   *
+   * For reference, ProseMirror's `history()` plugin defaults to `depth: 100`.
+   */
+  maxDepth: number | null;
+}
+
+/** Internal writable signals created during the init phase. */
+interface HistoryExtensionInit {
+  canRedo: Signal<boolean>;
+  canUndo: Signal<boolean>;
+}
+
+/**
+ * The output signals exposed by {@link HistoryExtension}.
+ *
+ * Config-derived signals (`delay`, `disabled`, `historyState`, `maxDepth`,
+ * `now`) are writable so that peer extensions such as
+ * {@link SharedHistoryExtension} can redirect them at runtime.
+ * The `canUndo` / `canRedo` signals are **readonly** for
+ * consumers — they are derived from the current
+ * {@link HistoryState} and kept in sync automatically.
+ */
+export interface HistoryExtensionOutput {
+  /**
+   * `true` when there is at least one entry in the redo stack, i.e. the
+   * editor can perform a redo.
+   */
+  canRedo: ReadonlySignal<boolean>;
+  /**
+   * `true` when there is at least one entry in the undo stack, i.e. the
+   * editor can perform an undo.
+   */
+  canUndo: ReadonlySignal<boolean>;
+  /** The merge-delay in milliseconds forwarded to {@link registerHistory}. */
+  delay: Signal<number>;
+  /** When `true` the history listener is not registered. */
+  disabled: Signal<boolean>;
+  /** The active {@link HistoryState} instance. */
+  historyState: Signal<HistoryState>;
+  /**
+   * Maximum number of entries the undo stack may hold. `null` disables the
+   * cap. Changes apply to the next history event — the current undo stack is
+   * not retroactively trimmed when the value is lowered.
+   */
+  maxDepth: Signal<number | null>;
+  /** The clock function forwarded to {@link registerHistory}. */
+  now: Signal<() => number>;
 }
 
 /**
  * Registers necessary listeners to manage undo/redo history stack and related
  * editor commands, via the \@lexical/history module.
  */
-
 export const HistoryExtension = defineExtension({
-  build: (editor, {delay, createInitialHistoryState, disabled, now}) =>
-    namedSignals({
-      delay,
-      disabled,
-      historyState: createInitialHistoryState(editor),
-      now,
-    }),
+  build: (
+    editor,
+    {delay, createInitialHistoryState, disabled, maxDepth, now},
+    state,
+  ): HistoryExtensionOutput => {
+    // The init phase already created writable Signal<boolean> instances for
+    // canUndo/canRedo. Signal<T> extends ReadonlySignal<T>, so exposing them
+    // through the HistoryExtensionOutput type (which declares them as
+    // ReadonlySignal<boolean>) is sufficient to prevent consumers from
+    // mutating them — no computed() wrapper required.
+    return {
+      ...namedSignals({
+        delay,
+        disabled,
+        historyState: createInitialHistoryState(editor),
+        maxDepth,
+        now,
+      }),
+      ...state.getInitResult(),
+    };
+  },
   config: safeCast<HistoryConfig>({
     createInitialHistoryState: createEmptyHistoryState,
     delay: 300,
     disabled: typeof window === 'undefined',
-    now: Date.now,
+    maxDepth: null,
+    // Wrapped rather than passing `Date.now` itself: a module-scope property
+    // read is a side effect to bundlers, which would pin this extension into
+    // every bundle that imports the module.
+    now: () => Date.now(),
+  }),
+  init: (): HistoryExtensionInit => ({
+    canRedo: signal(false),
+    canUndo: signal(false),
   }),
   name: '@lexical/history/History',
   register: (editor, config, state) => {
+    const {canUndo, canRedo} = state.getInitResult();
     const stores = state.getOutput();
-    return effect(() =>
-      stores.disabled.value
-        ? undefined
-        : registerHistory(editor, stores.historyState.value, stores.delay, () =>
-            stores.now.peek()(),
-          ),
-    );
+    // Single update path: passing `null` resets both signals (used for the
+    // disabled state); passing a HistoryState derives them from its stacks
+    // (used by registerHistory on init and after every mutation). The batch
+    // ensures subscribers to both signals are only notified once per change.
+    const syncFromHistoryState = (historyState: HistoryState | null) =>
+      batch(() => {
+        canUndo.value =
+          historyState != null && historyState.undoStack.length > 0;
+        canRedo.value =
+          historyState != null && historyState.redoStack.length > 0;
+      });
+    return effect(() => {
+      if (stores.disabled.value) {
+        syncFromHistoryState(null);
+        return undefined;
+      }
+      return registerHistory(
+        editor,
+        stores.historyState.value,
+        stores.delay,
+        () => stores.now.peek()(),
+        syncFromHistoryState,
+        stores.maxDepth,
+      );
+    });
   },
 });
+
+const HMR_EXTENSION_NAME = '@lexical/extension/HMR';
 
 function getHistoryPeer(editor: LexicalEditor | null | undefined) {
   return editor
@@ -596,6 +904,29 @@ function getHistoryPeer(editor: LexicalEditor | null | undefined) {
         HistoryExtension.name,
       )
     : null;
+}
+
+/**
+ * Reads `editor`'s HMR restore counter, subscribing the calling effect to it.
+ *
+ * `HMRExtension` restores an editor's `HistoryState` by assigning a rebuilt
+ * one to that editor's signal, which for a shared history would leave this
+ * editor and its parent holding two different histories — this editor's own
+ * restore replacing the shared object, or the parent's leaving this one
+ * pointing at the object the parent no longer uses. Depending on the counter
+ * re-runs the sync below after either, which re-links them.
+ *
+ * A peer lookup by name rather than a dependency: HMRExtension is a
+ * development-time extension that most editors do not have.
+ */
+function hmrRestoreCount(editor: LexicalEditor | null | undefined): number {
+  const peer = editor
+    ? getPeerDependencyFromEditor<typeof HMRExtension>(
+        editor,
+        HMR_EXTENSION_NAME,
+      )
+    : undefined;
+  return peer ? peer.output.restoreCount.value : 0;
 }
 
 export interface SharedHistoryConfig {
@@ -637,6 +968,10 @@ export const SharedHistoryExtension = defineExtension({
       const {disabled, parentEditor} = state.getOutput();
       if (!disabled.value) {
         const {output} = state.getDependency(HistoryExtension);
+        // Subscribe to both restore counters, so that an HMR reload that
+        // rebuilds either editor's history re-links the two.
+        hmrRestoreCount(editor);
+        hmrRestoreCount(parentEditor.value);
         const parentPeer = getHistoryPeer(parentEditor.value);
         if (!parentPeer) {
           return;
@@ -646,6 +981,10 @@ export const SharedHistoryExtension = defineExtension({
           output.delay.value = parentOutput.delay.value;
           output.historyState.value = parentOutput.historyState.value;
           output.now.value = parentOutput.now.value;
+          // The cap must come from the parent too: the child pushes onto the
+          // parent's shared undoStack, so applying the child's own (default
+          // null) maxDepth would silently void the limit the app configured.
+          output.maxDepth.value = parentOutput.maxDepth.value;
           // Note that toggling the parent history will force this to be changed
           output.disabled.value = parentOutput.disabled.value;
         });

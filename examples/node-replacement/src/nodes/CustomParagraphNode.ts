@@ -7,20 +7,14 @@
  */
 import {
   $applyNodeReplacement,
-  EditorConfig,
+  defineExtension,
+  type EditorConfig,
   ParagraphNode,
-  SerializedParagraphNode,
 } from 'lexical';
 
 export class CustomParagraphNode extends ParagraphNode {
-  static getType() {
-    return 'custom-paragraph';
-  }
-  static clone(node: CustomParagraphNode): CustomParagraphNode {
-    return new CustomParagraphNode(node.__key);
-  }
-  static importJSON(json: SerializedParagraphNode): CustomParagraphNode {
-    return $createCustomParagraphNode().updateFromJSON(json);
+  $config() {
+    return this.config('custom-paragraph', {extends: ParagraphNode});
   }
   createDOM(config: EditorConfig) {
     const el = super.createDOM(config);
@@ -35,3 +29,20 @@ export class CustomParagraphNode extends ParagraphNode {
 export function $createCustomParagraphNode() {
   return $applyNodeReplacement(new CustomParagraphNode());
 }
+
+/**
+ * Registers CustomParagraphNode and replaces every ParagraphNode with it.
+ * `withKlass` lets transforms and listeners registered for ParagraphNode
+ * apply to CustomParagraphNode too.
+ */
+export const CustomParagraphExtension = defineExtension({
+  name: '@lexical/examples/node-replacement/CustomParagraph',
+  nodes: () => [
+    CustomParagraphNode,
+    {
+      replace: ParagraphNode,
+      with: () => $createCustomParagraphNode(),
+      withKlass: CustomParagraphNode,
+    },
+  ],
+});

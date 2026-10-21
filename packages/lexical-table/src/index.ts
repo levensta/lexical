@@ -6,7 +6,10 @@
  *
  */
 
-export type {SerializedTableCellNode} from './LexicalTableCellNode';
+export type {
+  SerializedTableCellNode,
+  TableCellHeaderState,
+} from './LexicalTableCellNode';
 export {
   $createTableCellNode,
   $isTableCellNode,
@@ -24,6 +27,7 @@ export {
   $createTableNode,
   $getElementForTableNode,
   $isScrollableTablesActive,
+  $isStickyScrollbarActive,
   $isTableNode,
   setScrollableTablesActive,
   TableNode,
@@ -61,7 +65,9 @@ export {
   getTableElement,
   getTableObserverFromTableElement,
 } from './LexicalTableSelectionHelpers';
+export type {TableCellRectBoundary} from './LexicalTableUtils';
 export {
+  $computeTableCellRectBoundary,
   $computeTableMap,
   $computeTableMapSkipCellCheck,
   $createTableNodeWithDimensions,
@@ -79,13 +85,24 @@ export {
   $getTableRowNodeFromTableCellNodeOrThrow,
   $insertTableColumn,
   $insertTableColumn__EXPERIMENTAL,
+  $insertTableColumnAtNode,
   $insertTableColumnAtSelection,
   $insertTableRow,
   $insertTableRow__EXPERIMENTAL,
+  $insertTableRowAtNode,
   $insertTableRowAtSelection,
   $isSimpleTable,
   $mergeCells,
   $moveTableColumn,
+  $moveTableRow,
   $removeTableRowAtIndex,
+  $setTableColumnIsHeader,
+  $setTableRowIsHeader,
   $unmergeCell,
+  $unmergeCellNode,
 } from './LexicalTableUtils';
+export {
+  TableImportRules,
+  TableRowSchema,
+  TableSchema,
+} from './TableImportExtension';

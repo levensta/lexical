@@ -15,17 +15,16 @@ import {
   initialize,
   pasteFromClipboard,
   test,
-  withExclusiveClipboardAccess,
 } from '../utils/index.mjs';
+
+test.skip(
+  ({isCollab, isPlainText}) => isPlainText || isCollab,
+  'Requires rich text without collaboration',
+);
 
 test.describe('Regression test #1384', () => {
   test.beforeEach(({isCollab, page}) => initialize({isCollab, page}));
-  test(`Properly pastes in code blocks`, async ({
-    page,
-    isPlainText,
-    isCollab,
-  }) => {
-    test.skip(isPlainText || isCollab);
+  test(`Properly pastes in code blocks`, async ({page}) => {
     await focusEditor(page);
     await page.keyboard.type('``` alert(1);');
     await page.keyboard.press('Enter');
@@ -36,11 +35,11 @@ test.describe('Regression test #1384', () => {
     await page.keyboard.press('ArrowUp');
     await page.keyboard.press('ArrowLeft');
     await selectCharacters(page, 'left', 8);
-    await withExclusiveClipboardAccess(async () => {
+    {
       const clipboard = await copyToClipboard(page);
       await page.keyboard.press('ArrowLeft');
       await pasteFromClipboard(page, clipboard);
-    });
+    }
     await assertHTML(
       page,
       html`
@@ -48,106 +47,12 @@ test.describe('Regression test #1384', () => {
           class="PlaygroundEditorTheme__code"
           dir="auto"
           spellcheck="false"
-          data-gutter="123"
-          data-highlight-language="javascript"
-          data-language="javascript">
-          <span
-            class="PlaygroundEditorTheme__tokenFunction"
-            data-lexical-text="true">
-            alert
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            (
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenProperty"
-            data-lexical-text="true">
-            1
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            )
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenFunction"
-            data-lexical-text="true">
-            alert
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            (
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenProperty"
-            data-lexical-text="true">
-            1
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            )
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            ;
-          </span>
+          data-gutter="123">
+          <span data-lexical-text="true">alert(1)alert(1);</span>
           <br />
-          <span
-            class="PlaygroundEditorTheme__tokenFunction"
-            data-lexical-text="true">
-            alert
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            (
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenProperty"
-            data-lexical-text="true">
-            2
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            )
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            ;
-          </span>
+          <span data-lexical-text="true">alert(2);</span>
           <br />
-          <span
-            class="PlaygroundEditorTheme__tokenFunction"
-            data-lexical-text="true">
-            alert
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            (
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenProperty"
-            data-lexical-text="true">
-            3
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            )
-          </span>
-          <span
-            class="PlaygroundEditorTheme__tokenPunctuation"
-            data-lexical-text="true">
-            ;
-          </span>
+          <span data-lexical-text="true">alert(3);</span>
         </code>
       `,
     );

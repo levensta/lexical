@@ -13,6 +13,7 @@ import type {
 } from './shared/types';
 import type {LexicalComposerContextWithEditor} from '@lexical/react/LexicalComposerContext';
 
+import invariant from '@lexical/internal/invariant';
 import {ContentEditable} from '@lexical/react/LexicalContentEditable';
 import {LexicalErrorBoundary} from '@lexical/react/LexicalErrorBoundary';
 import {ReactProviderExtension} from '@lexical/react/ReactProviderExtension';
@@ -21,7 +22,6 @@ import {
   defineExtension,
   shallowMergeConfig,
 } from 'lexical';
-import invariant from 'shared/invariant';
 
 import {buildEditorComponent} from './shared/buildEditorComponent';
 
@@ -104,10 +104,12 @@ export const ReactExtension = defineExtension({
   },
   name: '@lexical/react/React',
   peerDependencies: [
-    // We are not trying to avoid the import, just the direct dependency,
-    // so using the extension directly is fine.
+    // We are not trying to avoid the import, just the direct dependency. The
+    // name is a literal rather than `ReactProviderExtension.name` because a
+    // module-scope property read is a side effect to bundlers, which would pin
+    // this extension into every bundle that imports the module.
     declarePeerDependency<typeof ReactProviderExtension>(
-      ReactProviderExtension.name,
+      '@lexical/react/ReactProvider',
     ),
   ],
 });

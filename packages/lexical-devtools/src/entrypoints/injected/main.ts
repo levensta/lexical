@@ -6,13 +6,13 @@
  *
  */
 
+import type {ExtensionState} from '../../store';
+import type {LexicalCommandLog} from '@lexical/devtools-core';
 import type {LexicalEditor} from 'lexical';
+import type {StoreApi} from 'zustand';
 
-import {LexicalCommandLog} from '@lexical/devtools-core';
 import {registerRPCService} from '@webext-pegasus/rpc';
-import {StoreApi} from 'zustand';
 
-import {ExtensionState} from '../../store';
 import {InjectedPegasusService} from './InjectedPegasusService';
 import scanAndListenForEditors from './scanAndListenForEditors';
 
@@ -28,4 +28,15 @@ export default async function main(
   );
 
   scanAndListenForEditors(tabID, extensionStore, commandLog);
+
+  // Serialized state is masked while no panel is open for this tab, so re-scan
+  // whenever that changes to swap the relayed states between masked and clear.
+  let wasPanelOpen = extensionStore.getState().isPanelOpen[tabID] === true;
+  extensionStore.subscribe(state => {
+    const isPanelOpen = state.isPanelOpen[tabID] === true;
+    if (isPanelOpen !== wasPanelOpen) {
+      wasPanelOpen = isPanelOpen;
+      scanAndListenForEditors(tabID, extensionStore, commandLog);
+    }
+  });
 }

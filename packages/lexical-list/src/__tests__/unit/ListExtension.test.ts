@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  *
  */
+
+// @vitest-environment node
 import {buildEditorFromExtensions, defineExtension} from '@lexical/extension';
 import {
   $createListItemNode,
@@ -97,7 +99,7 @@ describe('CheckListExtension', () => {
       }
     });
 
-    editor.dispatchCommand(INSERT_PARAGRAPH_COMMAND, undefined);
+    editor.dispatchCommand(INSERT_PARAGRAPH_COMMAND);
 
     editor.update(() => {
       const root = $getRoot();

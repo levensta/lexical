@@ -6,9 +6,8 @@
  *
  */
 
-import type {JSX} from 'react';
-
 import {$isLinkNode, TOGGLE_LINK_COMMAND} from '@lexical/link';
+import {$convertSelectionToMarkdownString} from '@lexical/markdown';
 import {useLexicalComposerContext} from '@lexical/react/LexicalComposerContext';
 import {
   NodeContextMenuOption,
@@ -25,9 +24,15 @@ import {
   type LexicalNode,
   PASTE_COMMAND,
 } from 'lexical';
-import {useMemo} from 'react';
+import {type JSX, useMemo} from 'react';
 
-export default function ContextMenuPlugin(): JSX.Element {
+import {PLAYGROUND_TRANSFORMERS} from '../MarkdownTransformers';
+
+export default function ContextMenuPlugin({
+  shouldPreserveNewLinesInMarkdown,
+}: {
+  shouldPreserveNewLinesInMarkdown: boolean;
+}): JSX.Element {
   const [editor] = useLexicalComposerContext();
 
   const items = useMemo(() => {
@@ -38,7 +43,7 @@ export default function ContextMenuPlugin(): JSX.Element {
         },
         $showOn: (node: LexicalNode) => $isLinkNode(node.getParent()),
         disabled: false,
-        icon: <i className="PlaygroundEditorTheme__contextMenuItemIcon" />,
+        icon: <i className="PlaygroundEditorTheme__contextMenuItemIcon link" />,
       }),
       new NodeContextMenuSeparator({
         $showOn: (node: LexicalNode) => $isLinkNode(node.getParent()),
@@ -59,6 +64,22 @@ export default function ContextMenuPlugin(): JSX.Element {
         disabled: false,
         icon: <i className="PlaygroundEditorTheme__contextMenuItemIcon copy" />,
       }),
+      new NodeContextMenuOption(`Copy as Markdown`, {
+        $onSelect: () => {
+          const markdown = $convertSelectionToMarkdownString(
+            PLAYGROUND_TRANSFORMERS,
+            $getSelection(),
+            shouldPreserveNewLinesInMarkdown,
+          );
+          if (markdown !== '') {
+            navigator.clipboard.writeText(markdown);
+          }
+        },
+        disabled: false,
+        icon: (
+          <i className="PlaygroundEditorTheme__contextMenuItemIcon markdown" />
+        ),
+      }),
       new NodeContextMenuOption(`Paste`, {
         $onSelect: () => {
           navigator.clipboard.read().then(async function (...args) {
@@ -67,25 +88,29 @@ export default function ContextMenuPlugin(): JSX.Element {
             const readClipboardItems = await navigator.clipboard.read();
             const item = readClipboardItems[0];
 
-            const permission = await navigator.permissions.query({
-              // @ts-expect-error These types are incorrect.
-              name: 'clipboard-read',
-            });
-            if (permission.state === 'denied') {
-              alert('Not allowed to paste from clipboard.');
-              return;
+            if (navigator.permissions) {
+              const permission = await navigator.permissions.query({
+                // @ts-expect-error These types are incorrect.
+                name: 'clipboard-read',
+              });
+              if (permission.state === 'denied') {
+                alert('Not allowed to paste from clipboard.');
+                return;
+              }
+
+              for (const type of item.types) {
+                const dataString = await (await item.getType(type)).text();
+                data.setData(type, dataString);
+              }
+
+              const event = new ClipboardEvent('paste', {
+                clipboardData: data,
+              });
+
+              editor.dispatchCommand(PASTE_COMMAND, event);
+            } else {
+              alert('Your browser does not support navigator.permissions');
             }
-
-            for (const type of item.types) {
-              const dataString = await (await item.getType(type)).text();
-              data.setData(type, dataString);
-            }
-
-            const event = new ClipboardEvent('paste', {
-              clipboardData: data,
-            });
-
-            editor.dispatchCommand(PASTE_COMMAND, event);
           });
         },
         disabled: false,
@@ -96,28 +121,34 @@ export default function ContextMenuPlugin(): JSX.Element {
       new NodeContextMenuOption(`Paste as Plain Text`, {
         $onSelect: () => {
           navigator.clipboard.read().then(async function (...args) {
-            const permission = await navigator.permissions.query({
-              // @ts-expect-error These types are incorrect.
-              name: 'clipboard-read',
-            });
+            if (navigator.permissions) {
+              const permission = await navigator.permissions.query({
+                // @ts-expect-error These types are incorrect.
+                name: 'clipboard-read',
+              });
 
-            if (permission.state === 'denied') {
-              alert('Not allowed to paste from clipboard.');
-              return;
+              if (permission.state === 'denied') {
+                alert('Not allowed to paste from clipboard.');
+                return;
+              }
+
+              const data = new DataTransfer();
+              const clipboardText = await navigator.clipboard.readText();
+              data.setData('text/plain', clipboardText);
+
+              const event = new ClipboardEvent('paste', {
+                clipboardData: data,
+              });
+              editor.dispatchCommand(PASTE_COMMAND, event);
+            } else {
+              alert('Your browser does not support navigator.permissions');
             }
-
-            const data = new DataTransfer();
-            const clipboardText = await navigator.clipboard.readText();
-            data.setData('text/plain', clipboardText);
-
-            const event = new ClipboardEvent('paste', {
-              clipboardData: data,
-            });
-            editor.dispatchCommand(PASTE_COMMAND, event);
           });
         },
         disabled: false,
-        icon: <i className="PlaygroundEditorTheme__contextMenuItemIcon" />,
+        icon: (
+          <i className="PlaygroundEditorTheme__contextMenuItemIcon paragraph" />
+        ),
       }),
       new NodeContextMenuSeparator(),
       new NodeContextMenuOption(`Delete Node`, {
@@ -145,7 +176,7 @@ export default function ContextMenuPlugin(): JSX.Element {
         ),
       }),
     ];
-  }, [editor]);
+  }, [editor, shouldPreserveNewLinesInMarkdown]);
 
   return (
     <NodeContextMenuPlugin

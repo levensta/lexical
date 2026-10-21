@@ -7,17 +7,17 @@
  */
 
 import {Tabs} from '@ark-ui/react/tabs';
-import {AutoFocusExtension} from '@lexical/extension';
+import {AutoFocusExtension, EditorStateExtension} from '@lexical/extension';
 import {HistoryExtension} from '@lexical/history';
 import {ContentEditable} from '@lexical/react/LexicalContentEditable';
 import {LexicalExtensionComposer} from '@lexical/react/LexicalExtensionComposer';
 import {RichTextExtension} from '@lexical/rich-text';
-import {defineExtension, ParagraphNode, TextNode} from 'lexical';
+import {defineExtension} from 'lexical';
 
 import ExampleTheme from './ExampleTheme';
 import {ShikiViewPlugin} from './plugins/ShikiViewPlugin';
 import {StyleViewPlugin} from './plugins/StyleViewPlugin';
-import {ToolbarPlugin} from './plugins/ToolbarPlugin';
+import {ToolbarExtension, ToolbarPlugin} from './plugins/ToolbarPlugin';
 import {StyleStateExtension} from './styleState';
 
 const placeholder = 'Enter some rich text...';
@@ -27,14 +27,12 @@ const editorExtension = defineExtension({
     RichTextExtension,
     HistoryExtension,
     AutoFocusExtension,
+    EditorStateExtension,
     StyleStateExtension,
+    ToolbarExtension,
   ],
   name: '@lexical/examples/node-state-style',
   namespace: 'NodeState Demo',
-  nodes: [ParagraphNode, TextNode],
-  onError(error: Error) {
-    throw error;
-  },
   theme: ExampleTheme,
 });
 

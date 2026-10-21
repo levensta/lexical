@@ -7,35 +7,41 @@
  */
 
 import {
-  addClassNamesToElement,
-  isHTMLElement,
-  removeClassNamesFromElement,
-} from '@lexical/utils';
-import {
   $applyNodeReplacement,
-  $createTextNode,
+  $getDocument,
   $isElementNode,
   $setDirectionFromDOM,
+  addClassNamesToElement,
+  aliasedValue,
   buildImportMap,
-  DOMConversionOutput,
-  DOMExportOutput,
-  EditorConfig,
-  EditorThemeClasses,
+  type DOMConversionOutput,
+  type DOMExportOutput,
+  type EditorConfig,
+  type EditorThemeClasses,
   ElementNode,
-  LexicalEditor,
-  LexicalNode,
-  LexicalUpdateJSON,
-  NodeKey,
+  enumValue,
+  isHTMLElement,
+  type LexicalEditor,
+  type LexicalNode,
+  type LexicalParseJSON,
+  type NodeKey,
+  nodeSchema,
   normalizeClassNames,
-  SerializedElementNode,
-  Spread,
+  numberValue,
+  removeClassNamesFromElement,
+  type SerializedElementNode,
+  type SerializedPartial,
+  type Spread,
+  withAccessors,
+  withField,
 } from 'lexical';
 
-import {$createListItemNode, $isListItemNode, ListItemNode} from '.';
+import {$createListItemNode, $isListItemNode, type ListItemNode} from '.';
 import {
   mergeNextSiblingListIfSameType,
   updateChildrenListItemValue,
 } from './formatList';
+import {GENERATED_LIST} from './LexicalListGeneratedJSON';
 import {$getListDepth} from './utils';
 
 export type SerializedListNode = Spread<
@@ -51,7 +57,45 @@ export type ListType = 'number' | 'bullet' | 'check';
 
 export type ListNodeTagType = 'ul' | 'ol';
 
+// A literal rather than a `Record<string, ListType>` so that the alias table
+// below keeps its keys: they are what the schema reports as the legacy
+// spellings it accepts.
+const TAG_TO_LIST_TYPE = {
+  ol: 'number',
+  ul: 'bullet',
+} as const satisfies Readonly<Record<string, ListType>>;
+
+const listNodeSchema = nodeSchema<ListNode>()({
+  // 'ul'/'ol' are the legacy tag-form listType some older documents carry,
+  // stated as an alias table rather than a transform: the mapping is data, so
+  // the codegen can compile this property's parse, where an arbitrary
+  // function would have taken the whole class out of the import half.
+  // Read straight off the field; applied through setListType, which also
+  // maintains the derived __tag, so the setter stays a method.
+  listType: withAccessors(
+    aliasedValue(enumValue(['number', 'bullet', 'check']), TAG_TO_LIST_TYPE),
+    {getter: {field: '__listType'}},
+  ),
+  start: withField(numberValue(1), {
+    field: '__start',
+  }),
+  // Derived from listType rather than stored: written on export, and
+  // deliberately not applied on import.
+  tag: withAccessors(enumValue(['ul', 'ol']), {
+    getter: {field: '__tag'},
+    setter: null,
+  }),
+});
+
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface ListNode {
+  exportJSON(compact?: false): SerializedListNode;
+  exportJSON(compact: boolean): SerializedPartial<SerializedListNode>;
+  updateFromJSON(serializedNode: LexicalParseJSON<SerializedListNode>): this;
+}
+
 /** @noInheritDoc */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class ListNode extends ElementNode {
   /** @internal */
   __tag: ListNodeTagType;
@@ -68,6 +112,7 @@ export class ListNode extends ElementNode {
         updateChildrenListItemValue(node);
       },
       extends: ElementNode,
+      generated: GENERATED_LIST,
       importDOM: buildImportMap({
         ol: () => ({
           conversion: $convertListNode,
@@ -78,22 +123,20 @@ export class ListNode extends ElementNode {
           priority: 0,
         }),
       }),
+      json: listNodeSchema,
     });
   }
 
   constructor(listType: ListType = 'number', start: number = 1, key?: NodeKey) {
     super(key);
-    const _listType = TAG_TO_LIST_TYPE[listType] || listType;
+    // Widened for the lookup: the parameter's type excludes the legacy tag
+    // spellings, and this normalizes them for a caller that passes one anyway.
+    const _listType: ListType =
+      (TAG_TO_LIST_TYPE as Readonly<Record<string, ListType>>)[listType] ||
+      listType;
     this.__listType = _listType;
     this.__tag = _listType === 'number' ? 'ol' : 'ul';
     this.__start = start;
-  }
-
-  afterCloneFrom(prevNode: this): void {
-    super.afterCloneFrom(prevNode);
-    this.__listType = prevNode.__listType;
-    this.__tag = prevNode.__tag;
-    this.__start = prevNode.__start;
   }
 
   getTag(): ListNodeTagType {
@@ -125,7 +168,7 @@ export class ListNode extends ElementNode {
 
   createDOM(config: EditorConfig, _editor?: LexicalEditor): HTMLElement {
     const tag = this.__tag;
-    const dom = document.createElement(tag);
+    const dom = $getDocument().createElement(tag);
 
     if (this.__start !== 1) {
       dom.setAttribute('start', String(this.__start));
@@ -154,13 +197,6 @@ export class ListNode extends ElementNode {
     return false;
   }
 
-  updateFromJSON(serializedNode: LexicalUpdateJSON<SerializedListNode>): this {
-    return super
-      .updateFromJSON(serializedNode)
-      .setListType(serializedNode.listType)
-      .setStart(serializedNode.start);
-  }
-
   exportDOM(editor: LexicalEditor): DOMExportOutput {
     const element = this.createDOM(editor._config, editor);
     if (isHTMLElement(element)) {
@@ -170,18 +206,16 @@ export class ListNode extends ElementNode {
       if (this.__listType === 'check') {
         element.setAttribute('__lexicalListType', 'check');
       }
+      // $convertListNode reads `dir` back off the <ol>/<ul>, so it has to be
+      // written here — this override does not call super.exportDOM, which is
+      // where ElementNode would otherwise emit it.
+      const direction = this.getDirection();
+      if (direction) {
+        element.dir = direction;
+      }
     }
     return {
       element,
-    };
-  }
-
-  exportJSON(): SerializedListNode {
-    return {
-      ...super.exportJSON(),
-      listType: this.getListType(),
-      start: this.getStart(),
-      tag: this.getTag(),
     };
   }
 
@@ -205,11 +239,18 @@ export class ListNode extends ElementNode {
         if (listItemNodesToInsert === nodesToInsert) {
           listItemNodesToInsert = [...nodesToInsert];
         }
-        listItemNodesToInsert[i] = this.createListItemNode().append(
-          $isElementNode(node) && !($isListNode(node) || node.isInline())
-            ? $createTextNode(node.getTextContent())
-            : node,
-        );
+        const listItem = this.createListItemNode();
+        if ($isElementNode(node) && !($isListNode(node) || node.isInline())) {
+          // A block can't stay a block inside a list item, so it is unwrapped
+          // into its own children — the same conversion $createListOrMerge and
+          // ListItemNode.append already perform. Stringifying it with
+          // getTextContent() instead would drop every text format and style and
+          // replace inline nodes (links, mentions, …) with plain text.
+          listItem.append(...node.getChildren());
+        } else {
+          listItem.append(node);
+        }
+        listItemNodesToInsert[i] = listItem;
       }
     }
     return super.splice(start, deleteCount, listItemNodesToInsert);
@@ -265,7 +306,7 @@ function $setListThemeClassNames(
       classesToAdd.push(...normalizeClassNames(listLevelClassName));
       for (let i = 0; i < listLevelsClassNames.length; i++) {
         if (i !== normalizedListDepth) {
-          classesToRemove.push(node.__tag + i);
+          classesToRemove.push(...normalizeClassNames(listLevelsClassNames[i]));
         }
       }
     }
@@ -362,11 +403,6 @@ function $convertListNode(
     node,
   };
 }
-
-const TAG_TO_LIST_TYPE: Record<string, ListType> = {
-  ol: 'number',
-  ul: 'bullet',
-};
 
 /**
  * Creates a ListNode of listType.

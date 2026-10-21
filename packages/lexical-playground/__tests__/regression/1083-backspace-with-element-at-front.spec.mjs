@@ -20,13 +20,13 @@ import {
   test,
 } from '../utils/index.mjs';
 
+test.skip(({isPlainText}) => isPlainText, 'Requires rich text');
+
 test.describe('Regression test #1083', () => {
   test.beforeEach(({isCollab, page}) => initialize({isCollab, page}));
   test(`Backspace with ElementNode at the front of the paragraph`, async ({
     page,
-    isPlainText,
   }) => {
-    test.skip(isPlainText);
     await focusEditor(page);
 
     await page.keyboard.type('Hello');
@@ -58,16 +58,16 @@ test.describe('Regression test #1083', () => {
     await assertHTML(
       page,
       html`
-        <p class="PlaygroundEditorTheme__paragraph" dir="auto"><br /></p>
+        <p class="PlaygroundEditorTheme__paragraph" dir="auto">
+          <br data-lexical-managed-linebreak="true" />
+        </p>
       `,
     );
   });
 
   test(`Backspace with ElementNode at the front of the selection`, async ({
     page,
-    isPlainText,
   }) => {
-    test.skip(isPlainText);
     await focusEditor(page);
 
     await page.keyboard.type('Say');

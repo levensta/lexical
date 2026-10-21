@@ -6,32 +6,15 @@
  *
  */
 
-import type {ListNode, ListType} from './';
-import type {
-  BaseSelection,
-  DOMConversionOutput,
-  DOMExportOutput,
-  EditorConfig,
-  EditorThemeClasses,
-  LexicalNode,
-  LexicalUpdateJSON,
-  NodeKey,
-  ParagraphNode,
-  RangeSelection,
-  SerializedElementNode,
-  Spread,
-} from 'lexical';
-
-import {
-  $insertNodeToNearestRootAtCaret,
-  addClassNamesToElement,
-  removeClassNamesFromElement,
-} from '@lexical/utils';
+import invariant from '@lexical/internal/invariant';
 import {
   $applyNodeReplacement,
   $copyNode,
   $createParagraphNode,
+  $getDocument,
+  $getSelection,
   $getSiblingCaret,
+  $insertNodeToNearestRootAtCaret,
   $isElementNode,
   $isParagraphNode,
   $isRangeSelection,
@@ -39,19 +22,40 @@ import {
   $rewindSiblingCaret,
   $setDirectionFromDOM,
   $setFormatFromDOM,
+  addClassNamesToElement,
+  type BaseSelection,
+  booleanValue,
   buildImportMap,
+  type DOMConversionOutput,
+  type DOMExportOutput,
+  type EditorConfig,
+  type EditorThemeClasses,
   ElementNode,
   getStyleObjectFromCSS,
   isHTMLElement,
-  LexicalEditor,
+  type LexicalEditor,
+  type LexicalNode,
+  type LexicalParseJSON,
+  type NodeKey,
+  nodeSchema,
   normalizeClassNames,
+  numberValue,
+  optional,
+  type ParagraphNode,
+  type RangeSelection,
+  removeClassNamesFromElement,
+  type SerializedElementNode,
+  type SerializedPartial,
   setDOMStyleFromCSS,
+  type Spread,
+  withAccessors,
+  withField,
 } from 'lexical';
-import invariant from 'shared/invariant';
 
-import {$createListNode, $isListNode} from './';
+import {$createListNode, $isListNode, type ListNode, type ListType} from './';
 import {$handleIndent, $handleOutdent, mergeLists} from './formatList';
-import {isNestedListNode} from './utils';
+import {GENERATED_LISTITEM} from './LexicalListGeneratedJSON';
+import {$getNewListStart, $isNestedListNode} from './utils';
 
 export type SerializedListItemNode = Spread<
   {
@@ -60,6 +64,36 @@ export type SerializedListItemNode = Spread<
   },
   SerializedElementNode
 >;
+
+/**
+ * The deepest list nesting `setIndent` will walk to. Each level it steps
+ * through nests or unwraps a whole list, so this bounds work an untrusted
+ * `indent` could otherwise make unbounded.
+ */
+const MAX_LIST_ITEM_INDENT = 128;
+
+const listItemNodeSchema = nodeSchema<ListItemNode>()({
+  // getChecked computes from the parent list's type, so the getter stays a
+  // method; setChecked is a bare field write.
+  checked: withAccessors(optional(booleanValue()), {
+    setter: {field: '__checked'},
+  }),
+  // Overrides the inherited ElementNode field to bound it. This indent is
+  // structural — applying it nests or unwraps one whole list per level — so an
+  // unbounded value out of untrusted JSON would build millions of nodes.
+  // `clamp`, because the plain bounds fall back to the *default* for a value
+  // outside them, which would read an over-deep item as indent 0 instead of as
+  // deeply nested.
+  indent: numberValue(0, {
+    clamp: true,
+    integer: true,
+    max: MAX_LIST_ITEM_INDENT,
+    min: 0,
+  }),
+  value: withField(numberValue(1), {
+    field: '__value',
+  }),
+});
 
 function applyMarkerStyles(
   dom: HTMLElement,
@@ -87,7 +121,17 @@ function applyMarkerStyles(
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface ListItemNode {
+  exportJSON(compact?: false): SerializedListItemNode;
+  exportJSON(compact: boolean): SerializedPartial<SerializedListItemNode>;
+  updateFromJSON(
+    serializedNode: LexicalParseJSON<SerializedListItemNode>,
+  ): this;
+}
+
 /** @noInheritDoc */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class ListItemNode extends ElementNode {
   /** @internal */
   __value: number;
@@ -139,12 +183,14 @@ export class ListItemNode extends ElementNode {
         }
       },
       extends: ElementNode,
+      generated: GENERATED_LISTITEM,
       importDOM: buildImportMap({
         li: () => ({
           conversion: $convertListItemElement,
           priority: 0,
         }),
       }),
+      json: listItemNodeSchema,
     });
   }
 
@@ -158,14 +204,8 @@ export class ListItemNode extends ElementNode {
     this.__checked = checked;
   }
 
-  afterCloneFrom(prevNode: this): void {
-    super.afterCloneFrom(prevNode);
-    this.__value = prevNode.__value;
-    this.__checked = prevNode.__checked;
-  }
-
   createDOM(config: EditorConfig): HTMLElement {
-    const element = document.createElement('li');
+    const element = $getDocument().createElement('li');
     this.updateListItemDOM(null, element, config);
 
     return element;
@@ -200,15 +240,6 @@ export class ListItemNode extends ElementNode {
     return false;
   }
 
-  updateFromJSON(
-    serializedNode: LexicalUpdateJSON<SerializedListItemNode>,
-  ): this {
-    return super
-      .updateFromJSON(serializedNode)
-      .setValue(serializedNode.value)
-      .setChecked(serializedNode.checked);
-  }
-
   exportDOM(editor: LexicalEditor): DOMExportOutput {
     const element = this.createDOM(editor._config);
 
@@ -222,7 +253,7 @@ export class ListItemNode extends ElementNode {
       element.dir = direction;
     }
 
-    if (isNestedListNode(this)) {
+    if ($isNestedListNode(this)) {
       return {
         after(containerElement) {
           if (isHTMLElement(containerElement)) {
@@ -242,14 +273,6 @@ export class ListItemNode extends ElementNode {
 
     return {
       element,
-    };
-  }
-
-  exportJSON(): SerializedListItemNode {
-    return {
-      ...super.exportJSON(),
-      checked: this.getChecked(),
-      value: this.getValue(),
     };
   }
 
@@ -297,14 +320,38 @@ export class ListItemNode extends ElementNode {
       list.insertAfter(replaceWithNode);
       replaceWithNode.insertAfter(newList);
     }
+    const toReplaceKey = this.__key;
+    let prevSizeBeforeChildrenTransfer = 0;
     if (includeChildren) {
       invariant(
         $isElementNode(replaceWithNode),
         'includeChildren should only be true for ElementNodes',
       );
-      this.getChildren().forEach((child: LexicalNode) => {
-        replaceWithNode.append(child);
-      });
+      prevSizeBeforeChildrenTransfer = replaceWithNode.getChildrenSize();
+      replaceWithNode.splice(
+        prevSizeBeforeChildrenTransfer,
+        0,
+        this.getChildren(),
+      );
+    }
+    // The base LexicalNode.replace remaps element-anchored selection points
+    // from the replaced node to the replacement, but this override skips
+    // super and the trailing this.remove() would otherwise drop selection
+    // onto a sibling list item via moveSelectionPointToSibling. Mirror the
+    // base behavior here for the element-anchored case.
+    if (includeChildren && $isElementNode(replaceWithNode)) {
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        for (const point of selection.getStartEndPoints()) {
+          if (point.key === toReplaceKey && point.type === 'element') {
+            point.set(
+              replaceWithNode.getKey(),
+              prevSizeBeforeChildrenTransfer + point.offset,
+              'element',
+            );
+          }
+        }
+      }
     }
     this.remove();
     if (list.getChildrenSize() === 0) {
@@ -334,6 +381,17 @@ export class ListItemNode extends ElementNode {
 
     if (siblings.length !== 0) {
       const newListNode = $copyNode(listNode);
+      // $copyNode carries the original list's start, which would restart the
+      // numbering at the split. The items moving into the new list keep the
+      // numbers they were already rendered with, so the new list has to start
+      // from the first of them (see issue #7032).
+      const firstSibling = siblings[0];
+      if (
+        newListNode.getListType() === 'number' &&
+        $isListItemNode(firstSibling)
+      ) {
+        newListNode.setStart($getNewListStart(listNode, firstSibling));
+      }
 
       siblings.forEach(sibling => newListNode.append(sibling));
 
@@ -351,8 +409,12 @@ export class ListItemNode extends ElementNode {
     if (
       prevSibling &&
       nextSibling &&
-      isNestedListNode(prevSibling) &&
-      isNestedListNode(nextSibling)
+      $isNestedListNode(prevSibling) &&
+      $isNestedListNode(nextSibling) &&
+      // Only join the surrounding sublists when they are the same kind of
+      // list, otherwise the second one loses its listType.
+      prevSibling.getFirstChild().getListType() ===
+        nextSibling.getFirstChild().getListType()
     ) {
       mergeLists(prevSibling.getFirstChild(), nextSibling.getFirstChild());
       nextSibling.remove();
@@ -377,41 +439,33 @@ export class ListItemNode extends ElementNode {
     return newElement;
   }
 
-  collapseAtStart(selection: RangeSelection): true {
-    const paragraph = $createParagraphNode();
-    const children = this.getChildren();
-    children.forEach(child => paragraph.append(child));
+  collapseAtStart(selection: RangeSelection): boolean {
+    if ($isNestedListNode(this)) {
+      return false;
+    }
+
     const listNode = this.getParentOrThrow();
     const listNodeParent = listNode.getParentOrThrow();
-    const isIndented = $isListItemNode(listNodeParent);
 
-    if (listNode.getChildrenSize() === 1) {
-      if (isIndented) {
-        // if the list node is nested, we just want to remove it,
-        // effectively unindenting it.
-        listNode.remove();
-        listNodeParent.select();
-      } else {
-        listNode.insertBefore(paragraph);
-        listNode.remove();
-        // If we have selection on the list item, we'll need to move it
-        // to the paragraph
-        const anchor = selection.anchor;
-        const focus = selection.focus;
-        const key = paragraph.getKey();
-
-        if (anchor.type === 'element' && anchor.getNode().is(this)) {
-          anchor.set(key, anchor.offset, 'element');
-        }
-
-        if (focus.type === 'element' && focus.getNode().is(this)) {
-          focus.set(key, focus.offset, 'element');
-        }
-      }
-    } else {
-      listNode.insertBefore(paragraph);
-      this.remove();
+    if ($isListItemNode(listNodeParent)) {
+      $handleOutdent(this);
+      return true;
     }
+
+    const paragraph = $createParagraphNode().append(...this.getChildren());
+
+    const nextSiblings = this.getNextSiblings();
+    if (nextSiblings.length > 0) {
+      const newList = $copyNode(listNode);
+      newList.append(...nextSiblings);
+      listNode.insertAfter(newList);
+    }
+    listNode.insertAfter(paragraph);
+    this.remove();
+    if (listNode.getChildrenSize() === 0) {
+      listNode.remove();
+    }
+    paragraph.selectStart();
 
     return true;
   }
@@ -473,9 +527,15 @@ export class ListItemNode extends ElementNode {
     invariant(typeof indent === 'number', 'Invalid indent value.');
     indent = Math.floor(indent);
     invariant(indent >= 0, 'Indent value must be non-negative.');
+    // Deliberately not clamped here: the bound belongs on the parse path (see
+    // listItemNodeSchema), because clamping the target of a walk that starts
+    // from the node's *current* indent would outdent an item that is already
+    // nested deeper than the bound — making `item.setIndent(item.getIndent())`
+    // destroy structure rather than do nothing.
+    const target = indent;
     let currentIndent = this.getIndent();
-    while (currentIndent !== indent) {
-      if (currentIndent < indent) {
+    while (currentIndent !== target) {
+      if (currentIndent < target) {
         $handleIndent(this);
         currentIndent++;
       } else {

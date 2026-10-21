@@ -5,21 +5,23 @@
  * LICENSE file in the root directory of this source tree.
  *
  */
-
 import {
+  $cloneWithProperties,
   $createParagraphNode,
   $createTextNode,
   $getRoot,
   $getSelection,
+  $isElementNode,
   $isRangeSelection,
   $isRootNode,
+  $isTextNode,
   ElementNode,
-  RootNode,
-  TextNode,
+  type RootNode,
 } from 'lexical';
 import {beforeEach, describe, expect, test} from 'vitest';
 
 import {
+  $assertNodeType,
   $createTestDecoratorNode,
   $createTestElementNode,
   $createTestInlineElementNode,
@@ -33,7 +35,7 @@ describe('LexicalRootNode tests', () => {
 
     function expectRootTextContentToBe(text: string): void {
       const {editor} = testEnv;
-      editor.getEditorState().read(() => {
+      editor.read('latest', () => {
         const root = $getRoot();
 
         expect(root.__cachedText).toBe(text);
@@ -78,11 +80,15 @@ describe('LexicalRootNode tests', () => {
         // serialized Lexical Core Node. Please ensure the correct adapter
         // logic is in place in the corresponding importJSON method
         // to accommodate these changes.
+        // Present-with-undefined, not absent: a getter with nothing to say
+        // puts undefined in the value position, which JSON.stringify omits.
         expect(node.exportJSON()).toStrictEqual({
           children: [],
           direction: null,
           format: '',
           indent: 0,
+          textFormat: undefined,
+          textStyle: undefined,
           type: 'root',
           version: 1,
         });
@@ -90,7 +96,7 @@ describe('LexicalRootNode tests', () => {
     });
 
     test('RootNode.clone()', async () => {
-      const rootNodeClone = (rootNode.constructor as typeof RootNode).clone();
+      const rootNodeClone = $cloneWithProperties(rootNode);
 
       expect(rootNodeClone).not.toBe(rootNode);
       expect(rootNodeClone).toStrictEqual(rootNode);
@@ -125,7 +131,7 @@ describe('LexicalRootNode tests', () => {
       });
 
       expect(
-        editor.getEditorState().read(() => {
+        editor.read('latest', () => {
           return $getRoot().getTextContent();
         }),
       ).toBe('Hello world');
@@ -246,7 +252,10 @@ describe('LexicalRootNode tests', () => {
       expectRootTextContentToBe('');
 
       await editor.update(() => {
-        const firstParagraph = $getRoot().getFirstChild<ElementNode>()!;
+        const firstParagraph = $assertNodeType(
+          $getRoot().getFirstChild(),
+          $isElementNode,
+        );
 
         firstParagraph.append($createTextNode('first line'));
       });
@@ -260,7 +269,10 @@ describe('LexicalRootNode tests', () => {
       expectRootTextContentToBe('first line\n\n');
 
       await editor.update(() => {
-        const secondParagraph = $getRoot().getLastChild<ElementNode>()!;
+        const secondParagraph = $assertNodeType(
+          $getRoot().getLastChild(),
+          $isElementNode,
+        );
 
         secondParagraph.append($createTextNode('second line'));
       });
@@ -274,15 +286,24 @@ describe('LexicalRootNode tests', () => {
       expectRootTextContentToBe('first line\n\nsecond line\n\n');
 
       await editor.update(() => {
-        const thirdParagraph = $getRoot().getLastChild<ElementNode>()!;
+        const thirdParagraph = $assertNodeType(
+          $getRoot().getLastChild(),
+          $isElementNode,
+        );
         thirdParagraph.append($createTextNode('third line'));
       });
 
       expectRootTextContentToBe('first line\n\nsecond line\n\nthird line');
 
       await editor.update(() => {
-        const secondParagraph = $getRoot().getChildAtIndex<ElementNode>(1)!;
-        const secondParagraphText = secondParagraph.getFirstChild<TextNode>()!;
+        const secondParagraph = $assertNodeType(
+          $getRoot().getChildAtIndex(1),
+          $isElementNode,
+        );
+        const secondParagraphText = $assertNodeType(
+          secondParagraph.getFirstChild(),
+          $isTextNode,
+        );
         secondParagraphText.setTextContent('second line!');
       });
 

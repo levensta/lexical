@@ -6,6 +6,7 @@
  *
  */
 
+import type {SerializedRawEditorState} from '../../../types';
 import type {IInjectedPegasusService} from '../../injected/InjectedPegasusService';
 import type {EditorState} from 'lexical';
 
@@ -17,7 +18,6 @@ import * as React from 'react';
 import {useEffect, useMemo, useRef, useState} from 'react';
 
 import {useExtensionStore} from '../../../store';
-import {SerializedRawEditorState} from '../../../types';
 
 interface Props {
   tabID: number;
@@ -98,7 +98,13 @@ export function EditorsList({tabID, setErrorMessage}: Props) {
                   .catch(e => setErrorMessage(e.stack))
               }
               generateContent={exportDOM =>
-                injectedPegasusService.generateTreeViewContent(key, exportDOM)
+                // The panel is open, so the user is deliberately inspecting
+                // this editor: ask for its text unmasked.
+                injectedPegasusService.generateTreeViewContent(
+                  key,
+                  exportDOM,
+                  false,
+                )
               }
             />
           </Accordion.ItemContent>

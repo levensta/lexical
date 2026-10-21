@@ -7,38 +7,42 @@
  */
 
 import type {CodeExtension} from './CodeExtension';
-import type {
-  DOMConversionMap,
-  DOMConversionOutput,
-  DOMExportOutput,
-  EditorConfig,
-  LexicalEditor,
-  LexicalNode,
-  LexicalUpdateJSON,
-  NodeKey,
-  ParagraphNode,
-  RangeSelection,
-  SerializedElementNode,
-  Spread,
-  TabNode,
-} from 'lexical';
 
 import {getPeerDependencyFromEditor} from '@lexical/extension';
+import warnOnlyOnce from '@lexical/internal/warnOnlyOnce';
 import {
   $create,
   $createLineBreakNode,
   $createParagraphNode,
   $createTabNode,
+  $getDocument,
   $getEditor,
   $isLineBreakNode,
   $isTabNode,
   $isTextNode,
   addClassNamesToElement,
+  type DOMConversionOutput,
+  type DOMExportOutput,
+  type EditorConfig,
   ElementNode,
   isHTMLElement,
+  type LexicalEditor,
+  type LexicalNode,
+  type LexicalParseJSON,
+  type NodeKey,
+  nodeSchema,
+  nullable,
+  optional,
+  type ParagraphNode,
+  type RangeSelection,
+  type SerializedElementNode,
+  type SerializedPartial,
   setDOMStyleFromCSS,
+  type Spread,
+  stringValue,
+  type TabNode,
+  withAccessors,
 } from 'lexical';
-import warnOnlyOnce from 'shared/warnOnlyOnce';
 
 import {
   $createCodeHighlightNode,
@@ -46,6 +50,10 @@ import {
   type CodeHighlightNode,
 } from './CodeHighlightNode';
 import {$getFirstCodeNodeOfLine} from './FlatStructureUtils';
+import {
+  afterCloneCodeNode,
+  GENERATED_CODE,
+} from './LexicalCodeCoreGeneratedJSON';
 
 export type SerializedCodeNode = Spread<
   {
@@ -55,7 +63,21 @@ export type SerializedCodeNode = Spread<
   SerializedElementNode
 >;
 
+// Single source of truth for parsing the node-specific properties of a
+// SerializedCodeNode (those it adds over a SerializedElementNode).
+const codeNodeSchema = nodeSchema<CodeNode>()({
+  // Read straight off the fields; applied through the setters, which
+  // normalize a falsy value to undefined.
+  language: withAccessors(optional(nullable(stringValue())), {
+    getter: {field: '__language'},
+  }),
+  theme: withAccessors(optional(stringValue()), {
+    getter: {field: '__theme'},
+  }),
+});
+
 export const DEFAULT_CODE_LANGUAGE = 'javascript';
+/** @internal Configurable through the extensions. */
 export const getDefaultCodeLanguage = (): string => DEFAULT_CODE_LANGUAGE;
 
 function hasChildDOMNodeTag(node: Node, tagName: string) {
@@ -63,7 +85,9 @@ function hasChildDOMNodeTag(node: Node, tagName: string) {
     if (isHTMLElement(child) && child.tagName === tagName) {
       return true;
     }
-    hasChildDOMNodeTag(child, tagName);
+    if (hasChildDOMNodeTag(child, tagName)) {
+      return true;
+    }
   }
   return false;
 }
@@ -76,7 +100,15 @@ const noExtensionDeprecation = warnOnlyOnce(
   'Using CodeNode without CodeExtension is deprecated',
 );
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface CodeNode {
+  exportJSON(compact?: false): SerializedCodeNode;
+  exportJSON(compact: boolean): SerializedPartial<SerializedCodeNode>;
+  updateFromJSON(serializedNode: LexicalParseJSON<SerializedCodeNode>): this;
+}
+
 /** @noInheritDoc */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class CodeNode extends ElementNode {
   /** @internal */
   __language: string | null | undefined;
@@ -85,31 +117,107 @@ export class CodeNode extends ElementNode {
   /** @internal */
   __isSyntaxHighlightSupported: boolean;
 
-  static getType(): string {
-    return 'code';
+  $config() {
+    return this.config('code', {
+      extends: ElementNode,
+      generated: GENERATED_CODE,
+      importDOM: {
+        // Typically <pre> is used for code blocks, and <code> for inline code styles
+        // but if it's a multi line <code> we'll create a block. Pass through to
+        // inline format handled by TextNode otherwise.
+        code: (node: Node) => {
+          const isMultiLine =
+            node.textContent != null &&
+            (/\r?\n/.test(node.textContent) || hasChildDOMNodeTag(node, 'BR'));
+
+          return isMultiLine
+            ? {
+                conversion: $convertPreElement,
+                priority: 1,
+              }
+            : null;
+        },
+        div: () => ({
+          conversion: $convertDivElement,
+          priority: 1,
+        }),
+        pre: () => ({
+          conversion: $convertPreElement,
+          priority: 0,
+        }),
+        table: (node: Node) => {
+          const table = node;
+          // domNode is a <table> since we matched it by nodeName
+          if (isGitHubCodeTable(table as HTMLTableElement)) {
+            return {
+              conversion: $convertTableElement,
+              priority: 3,
+            };
+          }
+          return null;
+        },
+        td: (node: Node) => {
+          // element is a <td> since we matched it by nodeName
+          const td = node as HTMLTableCellElement;
+          const table: HTMLTableElement | null = td.closest('table');
+
+          if (isGitHubCodeCell(td) || (table && isGitHubCodeTable(table))) {
+            // Return a no-op if it's a table cell in a code table, but not a code line.
+            // Otherwise it'll fall back to the T
+            return {
+              conversion: convertCodeNoop,
+              priority: 3,
+            };
+          }
+
+          return null;
+        },
+        tr: (node: Node) => {
+          // element is a <tr> since we matched it by nodeName
+          const tr = node as HTMLTableCellElement;
+          const table: HTMLTableElement | null = tr.closest('table');
+          if (table && isGitHubCodeTable(table)) {
+            return {
+              conversion: convertCodeNoop,
+              priority: 3,
+            };
+          }
+          return null;
+        },
+      },
+      json: codeNodeSchema,
+    });
   }
 
-  static clone(node: CodeNode): CodeNode {
-    return new CodeNode(node.__language, node.__key);
-  }
-
-  constructor(language?: string | null | undefined, key?: NodeKey) {
+  // `language` carries an explicit `undefined` default so the constructor
+  // reports zero required arguments and `$config` can synthesize the static
+  // `clone` from the no-argument constructor.
+  constructor(language: string | null | undefined = undefined, key?: NodeKey) {
     super(key);
     this.__language = language || undefined;
     this.__isSyntaxHighlightSupported = false;
     this.__theme = undefined;
   }
 
+  // Written rather than synthesized from the schema, because
+  // `__isSyntaxHighlightSupported` is not a serialized property and no schema
+  // describes it: the highlighter extensions set it as they run, and a clone
+  // that dropped it would render unhighlighted until the next pass.
+  //
+  // Declaring one of these takes the class out of the synthesized
+  // `afterCloneFrom` entirely, so the schema's own fields are this method's
+  // responsibility too — but not its boilerplate: `afterCloneCodeNode` is
+  // generated from the same declaration, so adding a property to the schema
+  // needs no line here.
   afterCloneFrom(prevNode: this): void {
     super.afterCloneFrom(prevNode);
-    this.__language = prevNode.__language;
-    this.__theme = prevNode.__theme;
+    afterCloneCodeNode(this, prevNode);
     this.__isSyntaxHighlightSupported = prevNode.__isSyntaxHighlightSupported;
   }
 
   // View
   createDOM(config: EditorConfig): HTMLElement {
-    const element = document.createElement('code');
+    const element = $getDocument().createElement('code');
     addClassNamesToElement(element, config.theme.code);
     element.setAttribute('spellcheck', 'false');
     const language = this.getLanguage();
@@ -180,7 +288,7 @@ export class CodeNode extends ElementNode {
   }
 
   exportDOM(editor: LexicalEditor): DOMExportOutput {
-    const element = document.createElement('pre');
+    const element = $getDocument().createElement('pre');
     addClassNamesToElement(element, editor._config.theme.code);
     element.setAttribute('spellcheck', 'false');
     const language = this.getLanguage();
@@ -202,92 +310,6 @@ export class CodeNode extends ElementNode {
       setDOMStyleFromCSS(element.style, style);
     }
     return {element};
-  }
-
-  static importDOM(): DOMConversionMap | null {
-    return {
-      // Typically <pre> is used for code blocks, and <code> for inline code styles
-      // but if it's a multi line <code> we'll create a block. Pass through to
-      // inline format handled by TextNode otherwise.
-      code: (node: Node) => {
-        const isMultiLine =
-          node.textContent != null &&
-          (/\r?\n/.test(node.textContent) || hasChildDOMNodeTag(node, 'BR'));
-
-        return isMultiLine
-          ? {
-              conversion: $convertPreElement,
-              priority: 1,
-            }
-          : null;
-      },
-      div: () => ({
-        conversion: $convertDivElement,
-        priority: 1,
-      }),
-      pre: () => ({
-        conversion: $convertPreElement,
-        priority: 0,
-      }),
-      table: (node: Node) => {
-        const table = node;
-        // domNode is a <table> since we matched it by nodeName
-        if (isGitHubCodeTable(table as HTMLTableElement)) {
-          return {
-            conversion: $convertTableElement,
-            priority: 3,
-          };
-        }
-        return null;
-      },
-      td: (node: Node) => {
-        // element is a <td> since we matched it by nodeName
-        const td = node as HTMLTableCellElement;
-        const table: HTMLTableElement | null = td.closest('table');
-
-        if (isGitHubCodeCell(td) || (table && isGitHubCodeTable(table))) {
-          // Return a no-op if it's a table cell in a code table, but not a code line.
-          // Otherwise it'll fall back to the T
-          return {
-            conversion: convertCodeNoop,
-            priority: 3,
-          };
-        }
-
-        return null;
-      },
-      tr: (node: Node) => {
-        // element is a <tr> since we matched it by nodeName
-        const tr = node as HTMLTableCellElement;
-        const table: HTMLTableElement | null = tr.closest('table');
-        if (table && isGitHubCodeTable(table)) {
-          return {
-            conversion: convertCodeNoop,
-            priority: 3,
-          };
-        }
-        return null;
-      },
-    };
-  }
-
-  static importJSON(serializedNode: SerializedCodeNode): CodeNode {
-    return $createCodeNode().updateFromJSON(serializedNode);
-  }
-
-  updateFromJSON(serializedNode: LexicalUpdateJSON<SerializedCodeNode>): this {
-    return super
-      .updateFromJSON(serializedNode)
-      .setLanguage(serializedNode.language)
-      .setTheme(serializedNode.theme);
-  }
-
-  exportJSON(): SerializedCodeNode {
-    return {
-      ...super.exportJSON(),
-      language: this.getLanguage(),
-      theme: this.getTheme(),
-    };
   }
 
   // Mutation
@@ -422,7 +444,10 @@ export function $isCodeNode(
 
 function $convertPreElement(domNode: HTMLElement): DOMConversionOutput {
   const language = domNode.getAttribute(LANGUAGE_DATA_ATTRIBUTE);
-  return {node: $createCodeNode(language)};
+  // exportDOM writes data-theme next to data-language, so read it back here
+  // too — otherwise the theme is dropped on every HTML round trip.
+  const theme = domNode.getAttribute(THEME_DATA_ATTRIBUTE);
+  return {node: $createCodeNode(language, theme)};
 }
 
 function $convertDivElement(domNode: Node): DOMConversionOutput {
