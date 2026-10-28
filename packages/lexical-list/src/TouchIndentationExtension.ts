@@ -8,19 +8,20 @@
 
 import type {LexicalEditor} from 'lexical';
 
+import {namedSignals} from '@lexical/extension';
+import {effect, type Signal} from '@lexical/extension';
 import {$findMatchingParent} from '@lexical/utils';
 import {
   $getSelection,
-  $isElementNode,
   $isRangeSelection,
   defineExtension,
   INDENT_CONTENT_COMMAND,
   OUTDENT_CONTENT_COMMAND,
+  registerEventListeners,
   safeCast,
 } from 'lexical';
 
-import {namedSignals} from './namedSignals';
-import {effect, type Signal} from './signals';
+import {$isListItemNode} from './LexicalListItemNode';
 
 const DEFAULT_SWIPE_THRESHOLD = 50;
 const DEFAULT_VERTICAL_GUARD = 30;
@@ -31,10 +32,7 @@ function $isSelectionInListItem(): boolean {
     return false;
   }
   const node = selection.anchor.getNode();
-  const listItem = $findMatchingParent(
-    node,
-    parent => $isElementNode(parent) && parent.getType() === 'listitem',
-  );
+  const listItem = $findMatchingParent(node, $isListItemNode);
   return listItem != null;
 }
 
@@ -58,7 +56,7 @@ function registerTouchIndentation(
           startX = touch.clientX;
           startY = touch.clientY;
           isSwiping = false;
-          isInListItem = editor.read(() => $isSelectionInListItem());
+          isInListItem = editor.read($isSelectionInListItem);
         }
       };
 
@@ -105,39 +103,47 @@ function registerTouchIndentation(
         isInListItem = false;
       };
 
-      rootElement.addEventListener('touchstart', handleTouchStart, {
-        capture: true,
-        passive: true,
-      });
-      rootElement.addEventListener('touchmove', handleTouchMove, {
-        capture: true,
-        passive: false,
-      });
-      rootElement.addEventListener('touchend', handleTouchEnd, {
-        capture: true,
-        passive: false,
-      });
-
-      return () => {
-        rootElement.removeEventListener('touchstart', handleTouchStart, {
+      return registerEventListeners(
+        rootElement,
+        {
+          touchend: handleTouchEnd,
+          touchmove: handleTouchMove,
+          touchstart: handleTouchStart,
+        },
+        {
           capture: true,
-        });
-        rootElement.removeEventListener('touchmove', handleTouchMove, {
-          capture: true,
-        });
-        rootElement.removeEventListener('touchend', handleTouchEnd, {
-          capture: true,
-        });
-      };
+          passive: false,
+        },
+      );
     }
   });
 }
 
 export interface TouchIndentationConfig {
+  /**
+   * Turns swipe-to-indent off when `true`. Defaults to `false`.
+   * This can be changed at runtime and takes effect immediately.
+   */
   disabled: boolean;
+  /**
+   * The minimum horizontal distance, in pixels, a finger must travel
+   * before a swipe counts as an indent or outdent. Defaults to `50`.
+   *
+   * Lower values make swiping more sensitive. Higher values require a
+   * longer swipe and help avoid accidental indents.
+   */
   swipeThreshold: number;
 }
 
+/**
+ * Adds swipe gestures for indenting list items on touch devices.
+ *
+ * When the cursor is inside a list item, swiping right with one finger
+ * indents the item and swiping left outdents it. The gesture only counts
+ * if the swipe is mostly horizontal, so normal vertical scrolling and
+ * text selection are not affected. Swipes are ignored when the editor is
+ * read-only or when more than one finger is touching the screen.
+ */
 export const TouchIndentationExtension = defineExtension({
   build(editor, config, state) {
     return namedSignals(config);
